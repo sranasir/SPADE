@@ -20,8 +20,13 @@
 
 package spade.reporter.audit;
 
+/**
+ * File implementation of ArtifactIdentity with 'path' identifiers
+ */
 public class FileIdentity extends IdentityWithPath{
 	
+	private static final long serialVersionUID = -4369838052194728358L;
+
 	public FileIdentity(String path){
 		super(path);
 	}

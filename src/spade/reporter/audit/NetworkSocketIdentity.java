@@ -23,7 +23,13 @@ package spade.reporter.audit;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Network socket implementation of ArtifactIdentity with identifiers 'source host',
+ * 'source port', 'destination host', 'destination port', and 'protocol'
+ */
 public class NetworkSocketIdentity implements ArtifactIdentity {
+
+	private static final long serialVersionUID = -4260359076544106668L;
 
 	private String sourceHost, sourcePort,
 					destinationHost, destinationPort,

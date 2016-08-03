@@ -19,8 +19,13 @@
  */
 package spade.reporter.audit;
 
+/**
+ * NamedPipe implementation of ArtifactIdentity with identifier 'path'
+ */
 public class NamedPipeIdentity extends IdentityWithPath{
 	
+	private static final long serialVersionUID = 7782179816828862420L;
+
 	public NamedPipeIdentity(String path){
 		super(path);
 	}

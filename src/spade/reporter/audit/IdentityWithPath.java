@@ -24,11 +24,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Just a utility class. Added because FileIdentity, NamePipeIdentity and UnixSocketIdentity all have the same implementation.
- * So they all extend this class
+ * Just a convenience class. Added because FileIdentity, NamedPipeIdentity and UnixSocketIdentity all have the same implementation.
+ * So they all extend this class.
  */
-
 public abstract class IdentityWithPath implements ArtifactIdentity{
+	
+	private static final long serialVersionUID = -6225520209209163585L;
 	
 	private String path;
 	

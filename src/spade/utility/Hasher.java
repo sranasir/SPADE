@@ -21,6 +21,8 @@
 
 package spade.utility;
 
+import java.io.Serializable;
+
 /**
  *
  * A generic interface specifically added to be used by ExternalMemoryMap class 
@@ -31,6 +33,6 @@ package spade.utility;
  *
  */
 
-public interface Hasher<T>{
+public interface Hasher<T> extends Serializable{
 	public String getHash(T t);
 }

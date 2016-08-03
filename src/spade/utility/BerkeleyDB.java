@@ -46,13 +46,21 @@ public class BerkeleyDB<V extends Serializable> implements ExternalStore<V> {
 	private Environment environment;
 	private Database database;
 	
-	public BerkeleyDB(String filePath, String databaseName) {
+	/**
+	 * Opens an existing database at the given path or creates a new database at the given path
+	 * 
+	 * @param dirPath path of the database
+	 * @param databaseName name of the database
+	 * @param create true if new database. false if opening an existing database
+	 */
+	public BerkeleyDB(String dirPath, String databaseName, boolean create) {
 		EnvironmentConfig envConfig = new EnvironmentConfig();
-		envConfig.setAllowCreate(true);
-		environment = new Environment(new File(filePath), envConfig);
-		
 		DatabaseConfig dbConfig = new DatabaseConfig();
-		dbConfig.setAllowCreate(true);
+		
+		envConfig.setAllowCreate(create);
+		dbConfig.setAllowCreate(create);
+		
+		environment = new Environment(new File(dirPath), envConfig);
 		database = environment.openDatabase(null, databaseName, dbConfig);
 	}
 
@@ -68,6 +76,7 @@ public class BerkeleyDB<V extends Serializable> implements ExternalStore<V> {
 		return true;
 	}
 
+	@SuppressWarnings("unchecked")
 	@Override
 	public V get(String key) throws Exception {
 		DatabaseEntry keyEntry = new DatabaseEntry(key.getBytes());

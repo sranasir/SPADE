@@ -22,11 +22,16 @@ package spade.reporter;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -49,6 +54,7 @@ import org.apache.commons.io.FileUtils;
 
 import spade.core.AbstractEdge;
 import spade.core.AbstractReporter;
+import spade.core.BloomFilter;
 import spade.core.Settings;
 import spade.edge.opm.Used;
 import spade.edge.opm.WasDerivedFrom;
@@ -70,7 +76,9 @@ import spade.utility.BerkeleyDB;
 import spade.utility.CommonFunctions;
 import spade.utility.Execute;
 import spade.utility.ExternalMemoryMap;
+import spade.utility.ExternalStore;
 import spade.utility.FileUtility;
+import spade.utility.Hasher;
 import spade.vertex.opm.Artifact;
 import spade.vertex.opm.Process;
 
@@ -86,6 +94,32 @@ public class Audit extends AbstractReporter {
 
     static final Logger logger = Logger.getLogger(Audit.class.getName());
 
+    /************************** Audit constants - START */
+    
+    private static final String SPADE_ROOT = Settings.getProperty("spade_root");
+    
+//  Just a human-friendly renaming of null
+    private final static String NOT_SET = null;
+    
+//  Added to indicate in the output from where the OPM annotations were gotten. 
+//  Either from 1) /proc or directly from 2) audit log or 3) beep instrumented kill syscall. 
+    private static final String SOURCE = "source",
+            PROC_FS = "/proc",
+            DEV_AUDIT = "/dev/audit",
+            BEEP = "beep";
+    
+//  Event id annotation key for OPM edges
+    private final static String EVENT_ID = "event id";
+    
+//  Time in milliseconds to wait for the input log reader thread while checking for kernel to empty the reporter's buffer  
+    private final long BUFFER_DRAIN_DELAY = 500;
+//  Time in milliseconds to wait for threads to complete running their code when shutdown is called
+    private final long THREAD_CLEANUP_TIMEOUT = 1000;
+    
+    /************************** Audit constants - END */
+    
+    /************************** Unix constants - START */
+    
 //  Following constant values are taken from:
 //  http://lxr.free-electrons.com/source/include/uapi/linux/sched.h 
 //  AND  
@@ -104,37 +138,9 @@ public class Audit extends AbstractReporter {
 //  http://lxr.free-electrons.com/source/include/uapi/asm-generic/fcntl.h#L19
     private final int O_RDONLY = 00000000, O_WRONLY = 00000001, O_RDWR = 00000002, O_CREAT = 00000100, O_TRUNC = 00001000;
   
-    private final long BUFFER_DRAIN_DELAY = 500;
+    /************************** Unix constants - END */
     
-    // Store log for debugging purposes
-    private boolean DEBUG_DUMP_LOG;
-    private String DEBUG_DUMP_FILE;
-    private BufferedReader eventReader;
-    private volatile boolean shutdown = false;
-    private long boottime = 0;
-    private final long THREAD_CLEANUP_TIMEOUT = 1000;
-    private boolean USE_READ_WRITE = false;
-    // To toggle monitoring of system calls: sendmsg, recvmsg, sendto, and recvfrom
-    private boolean USE_SOCK_SEND_RCV = false;
-    private Boolean ARCH_32BIT = true;
-//    private final String simpleDatePattern = "EEE MMM d H:mm:ss yyyy";
-    private static final String SPADE_ROOT = Settings.getProperty("spade_root");
-    private String AUDIT_EXEC_PATH;
-    // Process map based on <pid, stack of vertices> pairs
-    private final Map<String, LinkedList<Process>> processUnitStack = new HashMap<String, LinkedList<Process>>();
-    // Process version map. Versioning based on units. pid -> unitid -> iterationcount
-    private final Map<String, Map<String, Long>> iterationNumber = new HashMap<String, Map<String, Long>>();
-
-    private final DescriptorManager descriptors = new DescriptorManager();
-    
-    // Event buffer map based on <audit_record_id <key, value>> pairs
-//    private final Map<String, Map<String, String>> eventBuffer = new HashMap<>();
-    private ExternalMemoryMap<String, HashMap<String, String>> eventBuffer;
-    
-    // Map for artifact infos to versions and bytes read/written on sockets 
-    private ExternalMemoryMap<ArtifactIdentity, ArtifactProperties> artifactIdentityToArtifactProperties;
-    
-    private Thread eventProcessorThread = null;
+    /************************** Audit log record parsing patterns - START */
     
     // Group 1: key
     // Group 2: value
@@ -143,67 +149,312 @@ public class Audit extends AbstractReporter {
     // Group 1: node
     // Group 2: type
     // Group 3: time
-    // Group 4: recordid
+    // Group 4: eventid
     private static final Pattern pattern_message_start = Pattern.compile("(?:node=(\\S+) )?type=(.+) msg=audit\\(([0-9\\.]+)\\:([0-9]+)\\):\\s*");
 
     // Group 1: cwd
-    //cwd is either a quoted string or an unquoted string in which case it is in hex format
+    // CWD is either a quoted string or an unquoted string in which case it is in hex format
     private static final Pattern pattern_cwd = Pattern.compile("cwd=(\".+\"|[a-zA-Z0-9]+)");
 
     // Group 1: item number
     // Group 2: name
     // Group 3: nametype
-    //name is either a quoted string or an unquoted string in which case it is in hex format
+    // Name is either a quoted string or an unquoted string in which case it is in hex format
     private static final Pattern pattern_path = Pattern.compile("item=([0-9]*) name=(\".+\"|[a-zA-Z0-9]+) .*nametype=([a-zA-Z]*)");
     
-    //  Added to indicate in the output from where the process info was read. Either from 
-    //  1) procfs or directly from 2) audit log. 
-    private static final String SOURCE = "source",
-            PROC_FS = "/proc",
-            DEV_AUDIT = "/dev/audit",
-            BEEP = "beep";
+    /************************** Audit log record parsing patterns - END */
     
-    private Thread auditLogThread = null;
-    
-    private BufferedWriter dumpWriter = null;
-        
+    /************************** Audit nobs to control behavior - START */
+
+//  To toggle monitoring of IO syscalls on files and pipes
+    private boolean USE_READ_WRITE = false;
+//	To toggle monitoring of IO syscalls on network sockets and unix sockets
+    private boolean USE_SOCK_SEND_RCV = false;
+//  To toggle writing out of audit log that is being read
+    private boolean DEBUG_DUMP_LOG = false;
+//  To toggle creation of beep units
     private boolean CREATE_BEEP_UNITS = false;
-        
-    private Map<String, BigInteger> pidToMemAddress = new HashMap<String, BigInteger>(); 
-    
-    private final static String EVENT_ID = "event id";
-    
+//  To toggle simplification of OPM annotations. Process annotations and operation annotation on edges  
     private boolean SIMPLIFY = true;
+//  To toggle building of initial process tree by reading /proc in case of live audit
     private boolean PROCFS = false;
-    
+//  To toggle sorting of audit log file provided in arguments
     private boolean SORTLOG = true;
-    
+//  To toggle versioning of network sockets
     private boolean NET_SOCKET_VERSIONING = false;
-    
+//  To toggle monitoring of unix sockets
     private boolean UNIX_SOCKETS = false;
-    
+//  To allow input audit log to be completely processed even if shutdown has been called
     private boolean WAIT_FOR_LOG_END = false;
-    
 //  To toggle monitoring of mmap, mmap2 and mprotect syscalls
     private boolean USE_MEMORY_SYSCALLS = true;
-    
+//  To toggle monitoring of system calls that only failed or only succeed. Valid values: "0", "1".
     private String AUDITCTL_SYSCALL_SUCCESS_FLAG = "1";
+//  To toggle loading a saved state on launch for the reporter
+    private boolean LOAD_STATE = false;
+//  To toggle saving of state on shutdown for the reporter
+    private boolean SAVE_STATE = false;
     
-    private String inputAuditLogFile = null;
+    /************************** Audit nobs to control behavior - START */
     
-    // Just a human-friendly renaming of null
-    private final static String NOT_SET = null;
-    // Timestamp that is used to identify when the time has changed in unit begin. Assumes that the timestamps are received in sorted order
-    private String lastTimestamp = NOT_SET;
-    // A map to keep track of counts of unit vertex with the same pid, unitid and iteration number.
-    private Map<UnitVertexIdentifier, Integer> unitIterationRepetitionCounts = new HashMap<UnitVertexIdentifier, Integer>();
-        
-    //cache maps paths. global so that we delete on exit
+    /************************** Audit globals */
+    
+//  Flag to let threads know that shutdown has been called and should stop doing what they are doing
+    private volatile boolean shutdown = false;
+//  Read from system and then used to calculate start time of processes when reading process information from /proc. Only used for live audit.
+    private long boottime = 0;
+//  Flag used to identify architecture to get system call from system call number. 
+//  Set from system in case of live audit.
+//  Set from user argument in case of input audit log file.
+    private Boolean ARCH_32BIT = true;
+//  Store log for debugging purposes. Default value below but can be overridden using user argument.
+    private String DEBUG_DUMP_FILE = SPADE_ROOT + "log/LinuxAudit.log"; //make sure SPADE_ROOT has been initialized before this
+//  The path to binary that reads audit log records from audispd socket
+    private String AUDIT_EXEC_PATH = SPADE_ROOT + "lib/spadeSocketBridge"; //make sure SPADE_ROOT has been initialized before this
+//  Cache maps paths. global so that we can caches delete on exit
     private String eventBufferCacheDatabasePath, artifactsCacheDatabasePath;
     
-    //a hashset to keep track of seen record types which aren't handled by Audit reporter yet. 
-    //Added to avoid output of redundant messages to spade log.
+//  The event reader from the spadeSocketBridge in case of Live Audit  
+    private BufferedReader eventReader;
+//  Event processor thread used to read audit log from spadeSocketBridge
+    private Thread eventProcessorThread = null;
+//  Thread to read from the input log file.
+    private Thread auditLogThread = null;
+//  Path for input audit log file to read from
+    private String inputAuditLogFile = null;
+//  A writer for the debug dump file
+    private BufferedWriter dumpWriter = null;
+
+//  Timestamp that is used to identify when the time has changed in unit begin. Assumes that the timestamps are received in sorted order
+    private String lastTimestamp = NOT_SET; 
+    
+//  Map<pid, list of process vertices>. First vertex in the list of processes is always the containing process vertex.
+//  Active unit process vertices are stacked on top previous vertices.
+    private Map<String, LinkedList<Process>> processUnitStack = new HashMap<String, LinkedList<Process>>();
+//  Map<pid, Map<unitId, iterationNumber>>. To keep count of unit begins (i.e. iteration begins) until unit end (i.e.
+//  loop end) is seen.
+    private Map<String, Map<String, Long>> iterationNumber = new HashMap<String, Map<String, Long>>();
+//  A map to keep track of counts of unit vertex with the same pid, unitid and iteration number in the same timestamp
+    private Map<UnitVertexIdentifier, Integer> unitIterationRepetitionCounts = new HashMap<UnitVertexIdentifier, Integer>();
+//  Map for keeping memory addresses under use by a pid as instrumented by beep kill syscalls
+    private Map<String, BigInteger> pidToMemAddress = new HashMap<String, BigInteger>(); 
+
+//  A manager for file descriptors of processes
+    private DescriptorManager descriptors = new DescriptorManager();
+//  Map for artifact identities to artifact properties 
+    private ExternalMemoryMap<ArtifactIdentity, ArtifactProperties> artifactIdentityToArtifactProperties;
+    
+//  Event buffer map based on Map<eventId, Map<key, value>>
+    private ExternalMemoryMap<String, HashMap<String, String>> eventBuffer;
+    
+//  A hashset to keep track of seen record types which aren't handled by Audit reporter yet. 
+//  Added to avoid output of redundant messages to spade log. Just keeps the type of the unhandled audit records.
     private final Set<String> seenTypesOfUnsupportedRecords = new HashSet<String>();
+    
+    public static void main(String[] args) throws Exception{
+    	String newDir = "newdir";
+    	String oldDir = "old/dir/e";
+    	FileUtils.forceMkdir(new File(oldDir));
+    	FileUtils.write(new File(oldDir + File.separator + "a.txt"), "helloworld");
+    	FileUtils.moveDirectoryToDirectory(new File(oldDir), new File(newDir), true);
+    	System.out.println(new File(new File(newDir).getAbsolutePath() + File.separator + new File(oldDir).getName()).exists());
+    }
+      
+    /**
+     * Checks if the map contains all the keys
+     * 
+     * @param log true if log message else false
+     * @param map the map to check keys in
+     * @param keys the keys to check in the map
+     * @return true if all keys exist else false. if parameters null then false
+     */
+    private <X> boolean mapContainsAllKeys(boolean log, Map<X,?> map, @SuppressWarnings("unchecked") X... keys){
+    	if(keys == null){
+    		if(log){
+    			logger.log(Level.WARNING, "keys are null");
+    		}
+    		return false;
+    	}
+    	if(map == null){
+    		if(log){
+    			logger.log(Level.WARNING, "map is null");
+    		}
+    		return false;
+    	}
+		boolean containsAll = true;
+		for(X key : keys){
+			if(!map.containsKey(key)){
+				if(log){
+					logger.log(Level.WARNING, key + " not defined.");
+				}    				
+				containsAll = false;
+			}
+		}
+		return containsAll;
+    }
+    
+    /*
+     * Things to save and load (in order):
+     * 1) descriptors
+     * 2) pidToMemAddress
+     * 3) unitIterationRepetitionCounts
+     * 4) iterationNumber
+     * 5) processUnitStack
+     * 6) lastTimestamp
+     * 7) eventBuffer.bloomFilter
+     * 8) eventBuffer.keyHasher
+     * 9) artifactIdentityToArtifactProperties.bloomFilter
+     * 10) artifactIdentityToArtifactProperties.keyHasher
+     */
+    
+    @SuppressWarnings("unchecked")
+	private boolean loadState(Map<String, String> auditConfig){
+    	ObjectInputStream objectReader = null;
+    	try{
+    		if(!mapContainsAllKeys(true, auditConfig, "eventBufferDatabaseName", "artifactsDatabaseName",
+    				"eventBufferCacheSize", "artifactsCacheSize", "cacheDatabasePath", "savedEventBufferDatabasePath",
+    				"savedArtifactsDatabasePath", "savedStateFile")){
+    			logger.log(Level.SEVERE, "Failed to load state because missing keys in audit config.");
+    			return false;
+    		}
+    		//read properties from audit config
+    		String eventsDBName = auditConfig.get("eventBufferDatabaseName");
+    		String artifactsDBName = auditConfig.get("artifactsDatabaseName");
+    		
+    		Integer eventsCacheMaxSize = CommonFunctions.parseInt(auditConfig.get("eventBufferCacheSize"), 0);
+    		Integer artifactsCacheMaxSize = CommonFunctions.parseInt(auditConfig.get("artifactsCacheSize"), 0);
+    		    		
+    		String cacheDBDir = auditConfig.get("cacheDatabasePath");
+    		String savedEventsDBDir = auditConfig.get("savedEventBufferDatabasePath");
+    		String savedArtifactsDBDir = auditConfig.get("savedArtifactsDatabasePath");
+    		
+    		//read objects
+    		objectReader = new ObjectInputStream(new FileInputStream(auditConfig.get("savedStateFile")));
+    		descriptors = (DescriptorManager)objectReader.readObject();
+    		pidToMemAddress = (Map<String, BigInteger>)objectReader.readObject();
+    		unitIterationRepetitionCounts = (Map<UnitVertexIdentifier, Integer>)objectReader.readObject();
+    		iterationNumber = (Map<String, Map<String, Long>>)objectReader.readObject();
+    		processUnitStack = (Map<String, LinkedList<Process>>)objectReader.readObject();
+    		lastTimestamp = (String)objectReader.readObject();
+        	//external memory map object
+    		BloomFilter<String> eventsBloomFilter = (BloomFilter<String>)objectReader.readObject();
+    		Hasher<String> eventsKeyHasher = (Hasher<String>)objectReader.readObject();
+    		BloomFilter<ArtifactIdentity> artifactsBloomFilter = (BloomFilter<ArtifactIdentity>)objectReader.readObject();
+    		Hasher<ArtifactIdentity> artifactsKeyHasher = (Hasher<ArtifactIdentity>)objectReader.readObject();
+    		
+    		//initialize external maps
+    		
+    		//create paths for the new directories
+    		eventBufferCacheDatabasePath = new File(cacheDBDir).getAbsolutePath() + File.separator + new File(savedEventsDBDir).getName();
+    		artifactsCacheDatabasePath = new File(cacheDBDir).getAbsolutePath() + File.separator + new File(savedArtifactsDBDir).getName();
+    		
+    		//delete the directories if they exist before moving to this path
+    		FileUtils.deleteQuietly(new File(eventBufferCacheDatabasePath));
+    		FileUtils.deleteQuietly(new File(artifactsCacheDatabasePath));
+    		
+    		//moving whole directories instead of just copying files inside the directory
+    		FileUtils.moveDirectoryToDirectory(new File(savedEventsDBDir), new File(cacheDBDir), true);
+    		FileUtils.moveDirectoryToDirectory(new File(savedArtifactsDBDir), new File(cacheDBDir), true);
+    		
+    		//load external memory maps
+    		ExternalStore<HashMap<String, String>> eventsExternalStore = 
+    				new BerkeleyDB<HashMap<String, String>>(eventBufferCacheDatabasePath, eventsDBName, false);
+    		ExternalStore<ArtifactProperties> artifactsExternalStore = 
+    				new BerkeleyDB<ArtifactProperties>(artifactsCacheDatabasePath, artifactsDBName, false);
+    		    		
+    		eventBuffer = 
+    				new ExternalMemoryMap<String, HashMap<String, String>>(eventsCacheMaxSize, eventsExternalStore, eventsBloomFilter);
+    		eventBuffer.setKeyHashFunction(eventsKeyHasher);
+    		
+    		artifactIdentityToArtifactProperties = 
+    				new ExternalMemoryMap<ArtifactIdentity, ArtifactProperties>(artifactsCacheMaxSize, artifactsExternalStore, artifactsBloomFilter);
+    		artifactIdentityToArtifactProperties.setKeyHashFunction(artifactsKeyHasher);
+    		    		
+    		return true;
+    	}catch(Exception e){
+    		logger.log(Level.SEVERE, "Failed to load saved state", e);
+    		return false;
+    	}finally{
+    		if(objectReader != null){
+    			try{
+    				objectReader.close();
+    			}catch(Exception e){
+    				logger.log(Level.SEVERE, "Failed to close object reader", e);
+    			}
+    		}
+    	}
+    }
+    
+    private boolean saveState(Map<String, String> auditConfig){
+    	ObjectOutputStream objectWriter = null;
+    	try{
+    		File savedStateFile = null;
+    		if(auditConfig.get("savedStateFile") == null){
+    			logger.log(Level.SEVERE, "Undefined savedStateFile key. Failed to save state.");
+    			return false;
+    		}else{
+    			savedStateFile = new File(auditConfig.get("savedStateFile"));
+    		}		
+        	//copy database to predefined directory.  make sure that the directory hasn't been deleted
+        	String dirToSaveEventDBAt = auditConfig.get("savedEventBufferDatabasePath");
+        	String dirToSaveArtifactDBAt = auditConfig.get("savedArtifactsDatabasePath");
+        	
+        	if(dirToSaveEventDBAt == null){
+        		logger.log(Level.SEVERE, "savedEventBufferDatabasePath key not defined in config. Save state failed.");
+        		return false;
+        	}
+        	
+        	if(dirToSaveArtifactDBAt == null){
+        		logger.log(Level.SEVERE, "savedArtifactsDatabasePath key not defined in config. Save state failed.");
+        		return false;
+        	}
+        	
+        	File dirFileToSaveEventDBAt = new File(dirToSaveEventDBAt);
+        	File dirFileToSaveArtifactDBAt = new File(dirToSaveArtifactDBAt);
+        	
+        	//delete old state if any
+        	FileUtils.deleteQuietly(dirFileToSaveEventDBAt);
+        	FileUtils.deleteQuietly(dirFileToSaveArtifactDBAt);
+        	
+        	//create new state directories
+        	FileUtils.forceMkdir(dirFileToSaveEventDBAt);
+        	FileUtils.forceMkdir(dirFileToSaveArtifactDBAt);
+        	
+        	//copy database to the newly created predefined directories
+        	FileUtils.copyDirectory(new File(eventBufferCacheDatabasePath), dirFileToSaveEventDBAt);
+        	FileUtils.copyDirectory(new File(artifactsCacheDatabasePath), dirFileToSaveArtifactDBAt);
+        	
+        	//if audit dir in cfg dir doesn't exist
+        	if(!savedStateFile.getParentFile().exists()){
+        		FileUtils.forceMkdir(savedStateFile.getParentFile());
+        	}
+        	
+        	objectWriter = new ObjectOutputStream(new FileOutputStream(savedStateFile));
+        	objectWriter.writeObject(descriptors);
+        	objectWriter.writeObject(pidToMemAddress);
+        	objectWriter.writeObject(unitIterationRepetitionCounts);
+        	objectWriter.writeObject(iterationNumber);
+        	objectWriter.writeObject(processUnitStack);
+        	objectWriter.writeObject(lastTimestamp);
+        	//external memory maps. 
+        	objectWriter.writeObject(eventBuffer.getBloomFilter());
+        	objectWriter.writeObject(eventBuffer.getKeyHashFunction());
+        	objectWriter.writeObject(artifactIdentityToArtifactProperties.getBloomFilter());
+        	objectWriter.writeObject(artifactIdentityToArtifactProperties.getKeyHashFunction());
+        	return true;
+    	}catch(Exception e){
+    		logger.log(Level.SEVERE, "Failed to save state", e);
+    		return false;
+    	}finally{
+    		if(objectWriter != null){
+    			try{
+    				objectWriter.close();
+    			}catch(Exception e){
+    				logger.log(Level.SEVERE, "Failed to close object writer", e);
+    			}
+    		}
+    	}
+    }
     
     @Override
     public boolean launch(String arguments) {
@@ -219,9 +470,6 @@ public class Audit extends AbstractReporter {
             logger.log(Level.SEVERE, "Error reading the system architecture", e);
             return false; //if unable to find out the architecture then report failure
         }
-
-        AUDIT_EXEC_PATH = SPADE_ROOT + "lib/spadeSocketBridge";
-        DEBUG_DUMP_FILE = SPADE_ROOT + "log/LinuxAudit.log";
 
         Map<String, String> args = parseKeyValPairs(arguments);
         if (args.containsKey("outputLog")) {
@@ -252,6 +500,12 @@ public class Audit extends AbstractReporter {
         if("false".equals(args.get("sortLog"))){
         	SORTLOG = false;
         }
+        if("true".equals(args.get("loadState"))){
+        	LOAD_STATE = true;
+        }
+        if("true".equals(args.get("saveState"))){
+        	SAVE_STATE = true;
+        }
         
         // Arguments below are only for experimental use
         if("false".equals(args.get("simplify"))){
@@ -277,9 +531,20 @@ public class Audit extends AbstractReporter {
         }
         // End of experimental arguments
 
-//        initialize cache data structures
-        
-        if(!initCacheMaps()){
+//      initialize or load cache data structures
+        try{
+	        Map<String, String> auditConfig = FileUtility.readConfigFileAsKeyValueMap(Settings.getDefaultConfigFilePath(Audit.class), "=");
+	        if(LOAD_STATE){
+	        	if(!loadState(auditConfig)){
+	        		return false;
+	        	}
+	        }else{
+		        if(!initCacheMaps()){
+		        	return false;
+		        }
+	        }
+        }catch(Exception e){
+        	logger.log(Level.SEVERE, "Failed to read config file", e);
         	return false;
         }
         
@@ -380,7 +645,7 @@ public class Audit extends AbstractReporter {
     	        		}catch(Exception e){
     	        			logger.log(Level.WARNING, "Failed to close audit input log reader", e);
     	        		}
-    	        		deleteCacheMaps();
+    	        		postProcessingCleanup();
     	        	}
     			}
     		});
@@ -412,7 +677,7 @@ public class Audit extends AbstractReporter {
 	                    } catch (IOException | InterruptedException e) {
 	                        logger.log(Level.SEVERE, "Error launching main runnable thread", e);
 	                    }finally{
-	                    	deleteCacheMaps();
+	                    	postProcessingCleanup();
 	                    }
 	                }
 	            };
@@ -533,8 +798,21 @@ public class Audit extends AbstractReporter {
         return true;
     }
     
-    private void deleteCacheMaps(){
+    /**
+     * Called after audit event processor thread is done doing it's work.
+     * Saves audit reporter state if flag was true and then deletes cache maps
+     */
+    private void postProcessingCleanup(){
     	try{
+    		    		
+    		eventBuffer.getExternalStore().shutdown();
+    		artifactIdentityToArtifactProperties.getExternalStore().shutdown();
+    		
+    		if(SAVE_STATE){
+    			Map<String, String> auditConfig = FileUtility.readConfigFileAsKeyValueMap(Settings.getDefaultConfigFilePath(Audit.class), "=");
+    			saveState(auditConfig);
+    		}
+    		
     		if(eventBufferCacheDatabasePath != null && new File(eventBufferCacheDatabasePath).exists()){
     			FileUtils.forceDelete(new File(eventBufferCacheDatabasePath));
     		}
@@ -666,13 +944,39 @@ public class Audit extends AbstractReporter {
              		return false;
              	}
              	
+             	BloomFilter<String> eventBufferBloomFilter = null;
+             	BloomFilter<ArtifactIdentity> artifactsBloomFilter = null;
+             	
+             	if(eventBufferFalsePositiveProbability < 0 || eventBufferFalsePositiveProbability > 1){
+             		logger.log(Level.SEVERE, "Event buffer bloom filter false positive probability must be in the range [0-1]");
+        			return false;
+        		}
+        		
+             	if(artifactsFalsePositiveProbability < 0 || artifactsFalsePositiveProbability > 1){
+             		logger.log(Level.SEVERE, "Artifacts bloom filter false positive probability must be in the range [0-1]");
+        			return false;
+        		}
+             	
+        		if(eventBufferExpectedNumberOfElements < 1){
+        			logger.log(Level.SEVERE, "Event buffer bloom filter expected number of elements cannot be less than 1");
+        			return false;
+        		}
+        		
+        		if(artifactsExpectedNumberOfElements < 1){
+        			logger.log(Level.SEVERE, "Artifacts bloom filter expected number of elements cannot be less than 1");
+        			return false;
+        		}
+        		
+        		eventBufferBloomFilter = new BloomFilter<String>(eventBufferFalsePositiveProbability, eventBufferExpectedNumberOfElements);
+        		artifactsBloomFilter = new BloomFilter<ArtifactIdentity>(artifactsFalsePositiveProbability, artifactsExpectedNumberOfElements);
+        		
              	eventBuffer = new ExternalMemoryMap<String, HashMap<String, String>>(eventBufferCacheSize, 
-                 				new BerkeleyDB<HashMap<String, String>>(eventBufferCacheDatabasePath, eventBufferDatabaseName), 
-                 				eventBufferFalsePositiveProbability, eventBufferExpectedNumberOfElements);
+                 				new BerkeleyDB<HashMap<String, String>>(eventBufferCacheDatabasePath, eventBufferDatabaseName, true), 
+                 				eventBufferBloomFilter);
                 artifactIdentityToArtifactProperties = 
                  		new ExternalMemoryMap<ArtifactIdentity, ArtifactProperties>(artifactsCacheSize, 
-                 				new BerkeleyDB<ArtifactProperties>(artifactsCacheDatabasePath, artifactsDatabaseName), 
-                 				artifactsFalsePositiveProbability, artifactsExpectedNumberOfElements);
+                 				new BerkeleyDB<ArtifactProperties>(artifactsCacheDatabasePath, artifactsDatabaseName, true), 
+                 				artifactsBloomFilter);
              }catch(Exception e){
              	logger.log(Level.SEVERE, "Failed to initialize necessary data structures", e);
              	return false;
@@ -3306,7 +3610,10 @@ public class Audit extends AbstractReporter {
 /**
  * Used to uniquely identity a unit iteration for a single timestamp. See {@link #pushUnitIterationOnStack(String, String, String) pushUnitIterationOnStack}.
  */
-class UnitVertexIdentifier{
+class UnitVertexIdentifier implements Serializable{
+	
+	private static final long serialVersionUID = -1582525150906258735L;
+	
 	private String pid, unitId, iteration;
 	public UnitVertexIdentifier(String pid, String unitId, String iteration){
 		this.pid = pid;

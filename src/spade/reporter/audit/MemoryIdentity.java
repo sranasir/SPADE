@@ -23,7 +23,12 @@ package spade.reporter.audit;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Memory implementation of ArtifactIdentity with 'memory address', 'size', and 'pid' identifiers
+ */
 public class MemoryIdentity implements ArtifactIdentity{
+	
+	private static final long serialVersionUID = -5923505073386106810L;
 	
 	private String memoryAddress;
 	private String size;

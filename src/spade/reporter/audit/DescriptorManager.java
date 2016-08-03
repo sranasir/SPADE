@@ -19,20 +19,43 @@
  */
 package spade.reporter.audit;
 
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 
-public class DescriptorManager {
+/**
+ * A class for managing file descriptors for a process
+ * 
+ */
+public class DescriptorManager implements Serializable{
 
-	private Map<String, Map<String, ArtifactIdentity>> descriptors = new HashMap<>();
+	private static final long serialVersionUID = 5724247327201528391L;
+
+	/**
+	 * Internal map to keep track of file descriptors. Map<pid, Map<fd, classes implementing ArtifactIdentity>>.
+	 */
+	private Map<String, Map<String, ArtifactIdentity>> descriptors = new HashMap<String, Map<String, ArtifactIdentity>>();
 	
-	public void addDescriptor(String pid, String fd, ArtifactIdentity artifactInfo){
+	/**
+	 * Adds a file descriptor for the process
+	 * 
+	 * @param pid process id
+	 * @param fd file descriptor number
+	 * @param artifactIdentity artifact identity object like FileIdentity and etc.
+	 */
+	public void addDescriptor(String pid, String fd, ArtifactIdentity artifactIdentity){
 		if(descriptors.get(pid) == null){
 			descriptors.put(pid, new HashMap<String, ArtifactIdentity>());
 		}
-		descriptors.get(pid).put(fd, artifactInfo);
+		descriptors.get(pid).put(fd, artifactIdentity);
 	}
 	
+	/**
+	 * Copies the given map of descriptors in the existing map
+	 * 
+	 * @param pid process id
+	 * @param newDescriptors map of descriptors to add
+	 */
 	public void addDescriptors(String pid, Map<String, ArtifactIdentity> newDescriptors){
 		if(descriptors.get(pid) == null){
 			descriptors.put(pid, new HashMap<String, ArtifactIdentity>());
@@ -40,6 +63,13 @@ public class DescriptorManager {
 		descriptors.get(pid).putAll(newDescriptors);
 	}
 	
+	/**
+	 * Removes and returns the descriptor if it exists
+	 * 
+	 * @param pid process id
+	 * @param fd file descriptor
+	 * @return ArtifactIdentity subclass or null if didn't exist
+	 */
 	public ArtifactIdentity removeDescriptor(String pid, String fd){
 		if(descriptors.get(pid) == null){
 			return null;
@@ -47,6 +77,13 @@ public class DescriptorManager {
 		return descriptors.get(pid).remove(fd);
 	}
 	
+	/**
+	 * Returns the descriptor if it exists
+	 * 
+	 * @param pid process id
+	 * @param fd file descriptor
+	 * @return ArtifactIdentity subclass or null if didn't exist
+	 */
 	public ArtifactIdentity getDescriptor(String pid, String fd){
 		if(descriptors.get(pid) == null){
 			descriptors.put(pid, new HashMap<String, ArtifactIdentity>());
@@ -68,6 +105,12 @@ public class DescriptorManager {
 		return descriptors.get(pid).get(fd);
 	}
 	
+	/**
+	 * Copies file descriptors from one process to another process
+	 * 	
+	 * @param fromPid process id to copy descriptors of
+	 * @param toPid process id to copy descriptors to
+	 */
 	public void copyDescriptors(String fromPid, String toPid){
 		if(descriptors.get(fromPid) == null){
 			return;
@@ -78,6 +121,12 @@ public class DescriptorManager {
 		descriptors.get(toPid).putAll(descriptors.get(fromPid));
 	}
 	
+	/**
+	 * Copies the reference of the file descriptors map from one process to another process
+	 * 
+	 * @param fromPid process id to get the file descriptors map's reference from
+	 * @param toPid process id to assign the file descriptors map's reference to
+	 */
 	public void linkDescriptors(String fromPid, String toPid){
 		if(descriptors.get(fromPid) == null){
 			descriptors.put(fromPid, new HashMap<String, ArtifactIdentity>());
@@ -85,6 +134,10 @@ public class DescriptorManager {
 		descriptors.put(toPid, descriptors.get(fromPid));
 	}
 	
+	/**
+	 * Removes the referenced map of file descriptors and creates a copy of the removed map of file descriptors for the process
+	 * @param pid process id
+	 */
 	public void unlinkDescriptors(String pid){
 		if(descriptors.get(pid) == null){
 			return;
@@ -92,6 +145,12 @@ public class DescriptorManager {
 		descriptors.put(pid, new HashMap<String, ArtifactIdentity>(descriptors.get(pid)));
 	}
 	
+	/**
+	 * Add an unknown descriptor object
+	 * 
+	 * @param pid process id
+	 * @param fd file descriptor
+	 */
 	public void addUnknownDescriptor(String pid, String fd){
 		addDescriptor(pid, fd, new UnknownIdentity(pid, fd));
 	}

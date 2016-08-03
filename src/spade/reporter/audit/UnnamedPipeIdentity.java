@@ -23,8 +23,14 @@ package spade.reporter.audit;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Unnamed pipe implementation of ArtifactIdentity with identifiers 'pid', 'fd0',
+ * and 'fd1'
+ */
 public class UnnamedPipeIdentity implements ArtifactIdentity{
 
+	private static final long serialVersionUID = -8320913539185410730L;
+	
 	private String fd0, fd1;
 	private String pid;
 	

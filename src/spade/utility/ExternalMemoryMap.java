@@ -41,7 +41,7 @@ import spade.core.BloomFilter;
  * 
  */
 
-public class ExternalMemoryMap<K, V extends Serializable>{
+public class ExternalMemoryMap<K extends Serializable, V extends Serializable>{
 	
 	private Logger logger = Logger.getLogger(ExternalMemoryMap.class.getName());
 
@@ -50,6 +50,8 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 	
 	//default hasher using the hashCode function.
 	private Hasher<K> keyHasher = new Hasher<K>(){
+		private static final long serialVersionUID = -8833186469255584509L;
+
 		public String getHash(K k){
 			return String.valueOf(k.hashCode());
 		}
@@ -71,11 +73,10 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 	 * Main constructor to create the map
 	 * @param cacheMaxSize Size of the in-memory map. Must be greater than 0.
 	 * @param cacheStore External storage to use for least recently used elements. Cannot be null
-	 * @param falsePositiveProbability is the desired false positive probability. Range [0-1]
-     * @param expectedNumberOfElements is the expected number of elements in the Bloom filter. Must be greater than 0
+	 * @param bloomFilter bloomFilter to use. Cannot be null
 	 */
 	
-	public ExternalMemoryMap(int cacheMaxSize, ExternalStore<V> cacheStore, double falsePositiveProbability, int expectedNumberOfElements) throws Exception{
+	public ExternalMemoryMap(int cacheMaxSize, ExternalStore<V> cacheStore, BloomFilter<K> bloomFilter) throws Exception{
 		
 		if(cacheMaxSize < 1){
 			throw new IllegalArgumentException("Cache size cannot be less than 1");
@@ -85,16 +86,12 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 			throw new IllegalArgumentException("External cache store cannot be null");
 		}
 		
-		if(falsePositiveProbability < 0 || falsePositiveProbability > 1){
-			throw new IllegalArgumentException("False positive probability must be in the range [0-1]");
-		}
-		
-		if(expectedNumberOfElements < 1){
-			throw new IllegalArgumentException("Expected number of elements cannot be less than 1");
+		if(bloomFilter == null){
+			throw new IllegalArgumentException("Bloomfilter cannot be null");
 		}
 		
 		leastRecentlyUsedCache = new HashMap<>();
-		bloomFilter = new BloomFilter<>(falsePositiveProbability, expectedNumberOfElements);
+		this.bloomFilter = bloomFilter;
 		this.cacheMaxSize = cacheMaxSize;
 		this.cacheStore = cacheStore;
 		
@@ -113,6 +110,15 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 		if(hasher != null){
 			this.keyHasher = hasher;
 		}
+	}
+	
+	/**
+	 * Returns the key hasher 
+	 * 
+	 * @return the key hasher instance
+	 */
+	public Hasher<K> getKeyHashFunction(){
+		return keyHasher;
 	}
 	
 	/**
@@ -167,6 +173,7 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 	 */
 	public V get(Object key) {
 		try{
+			@SuppressWarnings("unchecked")
 			K k = (K)key;
 			if(bloomFilter.contains(k)){ //bloomfilter contains the key
 				if(leastRecentlyUsedCache.get(k) != null){ //exists in cache
@@ -249,6 +256,7 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 	 */
 	public V remove(Object key) {
 		try{
+			@SuppressWarnings("unchecked")
 			K k = (K)key;
 			String hash = keyHasher.getHash(k);
 			if(bloomFilter.contains(k)){
@@ -287,6 +295,22 @@ public class ExternalMemoryMap<K, V extends Serializable>{
 		head = new Node<K, V>(null, null);
 		tail = new Node<K, V>(null, null);
 	}
+	
+	/**
+	 * Get the internal bloomfilter
+	 * @return the bloomfilter instance
+	 */
+	public BloomFilter<K> getBloomFilter(){
+		return bloomFilter;
+	}
+	
+	/**
+	 * Returns external store instance
+	 * @return external store instance
+	 */
+	public ExternalStore<V> getExternalStore(){
+		return cacheStore;
+	}
 }
 
 /**
@@ -298,7 +322,9 @@ public class ExternalMemoryMap<K, V extends Serializable>{
  * @param Object value in the key-value pair
  */
 
-class Node<K, V>{
+class Node<K, V> implements Serializable{
+	
+	private static final long serialVersionUID = 1123937753688889058L;
 	
 	public K key;
 	public V value;

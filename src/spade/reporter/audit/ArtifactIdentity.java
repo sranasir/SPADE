@@ -20,18 +20,36 @@
 
 package spade.reporter.audit;
 
+import java.io.Serializable;
 import java.util.Map;
 
-public interface ArtifactIdentity {
+/**
+ * Interface that needs to be implemented by any class that needs to be treated as a file descriptor by 
+ * the spade.reporter.audit.DescriptorManager class
+ */
+public interface ArtifactIdentity extends Serializable{
 	
+	/**
+	 * Allowed descriptor subtypes for classes implementing this interface
+	 */
 	public static final String SUBTYPE_FILE = "file",
-								SUBTYPE_SOCKET = "network",
+								SUBTYPE_SOCKET = "network", //for unix and network sockets at the moment
 								SUBTYPE_MEMORY = "memory",
-								SUBTYPE_PIPE = "pipe",
+								SUBTYPE_PIPE = "pipe", //for named and unnamed pipes at the moment
 								SUBTYPE_UNKNOWN = "unknown";
 	
+	/**
+	 * Should returns the OPM annotations map for the artifact 
+	 * 
+	 * @return the map of annotations
+	 */
 	public abstract Map<String, String> getAnnotationsMap();
 	
+	/**
+	 * Should return one of the subtype as defined in this class depending on the subclass
+	 * 
+	 * @return the subtype
+	 */
 	public abstract String getSubtype();
 		
 }

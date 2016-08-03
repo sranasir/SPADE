@@ -23,7 +23,14 @@ package spade.reporter.audit;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Unknown type of descriptor implementation of ArtifactIdentity with identifiers 'pid',
+ * and 'fd'
+ */
+
 public class UnknownIdentity implements ArtifactIdentity{
+
+	private static final long serialVersionUID = -1619815321794811169L;
 
 	private String pid, fd;
 	

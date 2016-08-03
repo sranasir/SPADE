@@ -20,8 +20,13 @@
 
 package spade.reporter.audit;
 
+/**
+ * Unix socket implementation of ArtifactIdentity with identifier 'path'
+ */
 public class UnixSocketIdentity extends IdentityWithPath{
 	
+	private static final long serialVersionUID = 2727429503771291877L;
+
 	public UnixSocketIdentity(String path){
 		super(path);
 	}
