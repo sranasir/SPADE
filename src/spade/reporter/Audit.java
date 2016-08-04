@@ -78,7 +78,6 @@ import spade.utility.Execute;
 import spade.utility.ExternalMemoryMap;
 import spade.utility.ExternalStore;
 import spade.utility.FileUtility;
-import spade.utility.Hasher;
 import spade.vertex.opm.Artifact;
 import spade.vertex.opm.Process;
 
@@ -301,10 +300,8 @@ public class Audit extends AbstractReporter {
      * 4) iterationNumber
      * 5) processUnitStack
      * 6) lastTimestamp
-     * 7) eventBuffer.bloomFilter
-     * 8) eventBuffer.keyHasher
-     * 9) artifactIdentityToArtifactProperties.bloomFilter
-     * 10) artifactIdentityToArtifactProperties.keyHasher
+     * 7) eventBuffer
+     * 8) artifactIdentityToArtifactProperties
      */
     
     @SuppressWarnings("unchecked")
@@ -312,7 +309,7 @@ public class Audit extends AbstractReporter {
     	ObjectInputStream objectReader = null;
     	try{
     		if(!mapContainsAllKeys(true, auditConfig, "eventBufferDatabaseName", "artifactsDatabaseName",
-    				"eventBufferCacheSize", "artifactsCacheSize", "cacheDatabasePath", "savedEventBufferDatabasePath",
+    				"cacheDatabasePath", "savedEventBufferDatabasePath",
     				"savedArtifactsDatabasePath", "savedStateFile")){
     			logger.log(Level.SEVERE, "Failed to load state because missing keys in audit config.");
     			return false;
@@ -320,9 +317,6 @@ public class Audit extends AbstractReporter {
     		//read properties from audit config
     		String eventsDBName = auditConfig.get("eventBufferDatabaseName");
     		String artifactsDBName = auditConfig.get("artifactsDatabaseName");
-    		
-    		Integer eventsCacheMaxSize = CommonFunctions.parseInt(auditConfig.get("eventBufferCacheSize"), 0);
-    		Integer artifactsCacheMaxSize = CommonFunctions.parseInt(auditConfig.get("artifactsCacheSize"), 0);
     		    		
     		String cacheDBDir = auditConfig.get("cacheDatabasePath");
     		String savedEventsDBDir = auditConfig.get("savedEventBufferDatabasePath");
@@ -336,13 +330,8 @@ public class Audit extends AbstractReporter {
     		iterationNumber = (Map<String, Map<String, Long>>)objectReader.readObject();
     		processUnitStack = (Map<String, LinkedList<Process>>)objectReader.readObject();
     		lastTimestamp = (String)objectReader.readObject();
-        	//external memory map object
-    		BloomFilter<String> eventsBloomFilter = (BloomFilter<String>)objectReader.readObject();
-    		Hasher<String> eventsKeyHasher = (Hasher<String>)objectReader.readObject();
-    		BloomFilter<ArtifactIdentity> artifactsBloomFilter = (BloomFilter<ArtifactIdentity>)objectReader.readObject();
-    		Hasher<ArtifactIdentity> artifactsKeyHasher = (Hasher<ArtifactIdentity>)objectReader.readObject();
-    		
-    		//initialize external maps
+        	
+    		//read external maps
     		
     		//create paths for the new directories
     		eventBufferCacheDatabasePath = new File(cacheDBDir).getAbsolutePath() + File.separator + new File(savedEventsDBDir).getName();
@@ -362,13 +351,11 @@ public class Audit extends AbstractReporter {
     		ExternalStore<ArtifactProperties> artifactsExternalStore = 
     				new BerkeleyDB<ArtifactProperties>(artifactsCacheDatabasePath, artifactsDBName, false);
     		    		
-    		eventBuffer = 
-    				new ExternalMemoryMap<String, HashMap<String, String>>(eventsCacheMaxSize, eventsExternalStore, eventsBloomFilter);
-    		eventBuffer.setKeyHashFunction(eventsKeyHasher);
+    		eventBuffer = (ExternalMemoryMap<String, HashMap<String, String>>)objectReader.readObject();
+    		eventBuffer.setCacheStore(eventsExternalStore);
     		
-    		artifactIdentityToArtifactProperties = 
-    				new ExternalMemoryMap<ArtifactIdentity, ArtifactProperties>(artifactsCacheMaxSize, artifactsExternalStore, artifactsBloomFilter);
-    		artifactIdentityToArtifactProperties.setKeyHashFunction(artifactsKeyHasher);
+    		artifactIdentityToArtifactProperties = (ExternalMemoryMap<ArtifactIdentity, ArtifactProperties>)objectReader.readObject();
+    		artifactIdentityToArtifactProperties.setCacheStore(artifactsExternalStore);
     		    		
     		return true;
     	}catch(Exception e){
@@ -437,10 +424,8 @@ public class Audit extends AbstractReporter {
         	objectWriter.writeObject(processUnitStack);
         	objectWriter.writeObject(lastTimestamp);
         	//external memory maps. 
-        	objectWriter.writeObject(eventBuffer.getBloomFilter());
-        	objectWriter.writeObject(eventBuffer.getKeyHashFunction());
-        	objectWriter.writeObject(artifactIdentityToArtifactProperties.getBloomFilter());
-        	objectWriter.writeObject(artifactIdentityToArtifactProperties.getKeyHashFunction());
+        	objectWriter.writeObject(eventBuffer);
+        	objectWriter.writeObject(artifactIdentityToArtifactProperties);
         	return true;
     	}catch(Exception e){
     		logger.log(Level.SEVERE, "Failed to save state", e);
@@ -805,8 +790,9 @@ public class Audit extends AbstractReporter {
     private void postProcessingCleanup(){
     	try{
     		    		
-    		eventBuffer.getExternalStore().shutdown();
-    		artifactIdentityToArtifactProperties.getExternalStore().shutdown();
+    		//shutdown to make sure the databases are flushed and in consistent state
+    		eventBuffer.getCacheStore().shutdown();
+    		artifactIdentityToArtifactProperties.getCacheStore().shutdown();
     		
     		if(SAVE_STATE){
     			Map<String, String> auditConfig = FileUtility.readConfigFileAsKeyValueMap(Settings.getDefaultConfigFilePath(Audit.class), "=");

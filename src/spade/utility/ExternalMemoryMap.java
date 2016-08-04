@@ -41,9 +41,11 @@ import spade.core.BloomFilter;
  * 
  */
 
-public class ExternalMemoryMap<K extends Serializable, V extends Serializable>{
+public class ExternalMemoryMap<K extends Serializable, V extends Serializable> implements Serializable{
 	
-	private Logger logger = Logger.getLogger(ExternalMemoryMap.class.getName());
+	private static final long serialVersionUID = 5643205268797218773L;
+
+	private transient Logger logger = Logger.getLogger(ExternalMemoryMap.class.getName());
 
 	//bloomfilter to check if the element exists in memory and/or external storage
 	private BloomFilter<K> bloomFilter;
@@ -64,7 +66,7 @@ public class ExternalMemoryMap<K extends Serializable, V extends Serializable>{
 	private Node<K, V> head, tail;
 	
 	//external storage for least recently used elements
-	private ExternalStore<V> cacheStore;
+	private transient ExternalStore<V> cacheStore;
 	
 	//max in-memory map size
 	private int cacheMaxSize = 0;
@@ -110,15 +112,6 @@ public class ExternalMemoryMap<K extends Serializable, V extends Serializable>{
 		if(hasher != null){
 			this.keyHasher = hasher;
 		}
-	}
-	
-	/**
-	 * Returns the key hasher 
-	 * 
-	 * @return the key hasher instance
-	 */
-	public Hasher<K> getKeyHashFunction(){
-		return keyHasher;
 	}
 	
 	/**
@@ -297,18 +290,18 @@ public class ExternalMemoryMap<K extends Serializable, V extends Serializable>{
 	}
 	
 	/**
-	 * Get the internal bloomfilter
-	 * @return the bloomfilter instance
+	 * Sets cache store instance
+	 * @param externalStore external store instance
 	 */
-	public BloomFilter<K> getBloomFilter(){
-		return bloomFilter;
+	public void setCacheStore(ExternalStore<V> externalStore){
+		this.cacheStore = externalStore;
 	}
 	
 	/**
-	 * Returns external store instance
+	 * Gets cache store instance
 	 * @return external store instance
 	 */
-	public ExternalStore<V> getExternalStore(){
+	public ExternalStore<V> getCacheStore(){
 		return cacheStore;
 	}
 }
