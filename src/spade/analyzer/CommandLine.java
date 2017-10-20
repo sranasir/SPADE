@@ -36,9 +36,9 @@ public class CommandLine extends AbstractAnalyzer
     public enum DigQueryCommands
     {
         QUERY_CONSTRAINT_KEY("constraint: "),
-        QUERY_CONSTRAINT_VALUE("<constraint_name> = <key> <operator> <value>"),
-        QUERY_ARITHMETIC_OPERATORS_KEY("arithmetic operators: "),
-        QUERY_ARITHMETIC_OPERATORS_VALUE("=|>|<|>=|<="),
+        QUERY_CONSTRAINT_VALUE("<constraint_name>: <key> <operator> <value>"),
+        QUERY_COMPARISON_OPERATORS_KEY("comparison operators: "),
+        QUERY_COMPARISON_OPERATORS_VALUE("=|>|<|>=|<="),
         QUERY_BOOLEAN_OPERATORS_KEY("boolean operators: "),
         QUERY_BOOLEAN_OPERATORS_VALUE("AND|OR"),
         QUERY_LIMIT_KEY("result limit: "),
@@ -275,7 +275,7 @@ public class CommandLine extends AbstractAnalyzer
 
                 // Step2: get the argument expression(s), split by the boolean operators
                 // The format for one argument is:
-                // <key> ARITHMETIC_OPERATOR <value> [BOOLEAN_OPERATOR]
+                // <key> COMPARISON_OPERATOR <value> [BOOLEAN_OPERATOR]
                 Pattern constraints_pattern = Pattern.compile("((?i)(?<=(" + DigQueryCommands.QUERY_BOOLEAN_OPERATORS_VALUE.value + "))|" +
                         "((?i)(?=(" + DigQueryCommands.QUERY_BOOLEAN_OPERATORS_VALUE.value + "))))");
                 String[] expressions = constraints_pattern.split(constraints);
@@ -285,8 +285,8 @@ public class CommandLine extends AbstractAnalyzer
                 while(i < expressions.length)
                 {
                     String expression = expressions[i];
-                    Pattern expression_pattern = Pattern.compile("((?<=(" + DigQueryCommands.QUERY_ARITHMETIC_OPERATORS_VALUE.value + "))|" +
-                            "(?=(" + DigQueryCommands.QUERY_ARITHMETIC_OPERATORS_VALUE.value + ")))");
+                    Pattern expression_pattern = Pattern.compile("((?<=(" + DigQueryCommands.QUERY_COMPARISON_OPERATORS_VALUE.value + "))|" +
+                            "(?=(" + DigQueryCommands.QUERY_COMPARISON_OPERATORS_VALUE.value + ")))");
                     String[] operands = expression_pattern.split(expression);
                     String key = operands[0].trim();
                     String operator = operands[1].trim();
