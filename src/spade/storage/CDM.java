@@ -1286,7 +1286,7 @@ public class CDM extends Kafka {
 	}
 
 	/**
-	 * Uses the bigHashCode function in AbstractVertex to get the hashcode which 
+	 * Uses the bigHashCode function in AbstractVertex to get the hashcode which
 	 * is then used to build the UUID object.
 	 * 
 	 * The bigHashCode is converted to hex values if {@link #hexUUIDs hexUUIDs} is true
@@ -1309,7 +1309,7 @@ public class CDM extends Kafka {
 	}
 
 	/**
-	 * Uses the bigHashCode function in AbstractEdge to get the hashcode which 
+	 * Uses the bigHashCode function in AbstractEdge to get the hashcode which
 	 * is then used to build the UUID object.
 	 * 
 	 * The bigHashCode is converted to hex values if {@link #hexUUIDs hexUUIDs} is true

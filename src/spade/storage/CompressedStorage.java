@@ -65,7 +65,7 @@ public class CompressedStorage extends AbstractStorage {
 	/**
 	 * This method is invoked by the kernel to initialize the storage.
 	 *
-	 * @param arguments The arguments with which this storage is to be
+	 * @param filePath The arguments with which this storage is to be
 	 *                  initialized.
 	 * @return True if the storage was initialized successfully.
 	 */
@@ -86,7 +86,7 @@ public class CompressedStorage extends AbstractStorage {
 		L=5;
 		nextVertexID = 0;
 		try {
-			benchmarks = new PrintWriter("/Users/melanie/Documents/benchmarks/compression_time_berkeleyDB.txt", "UTF-8");
+			benchmarks = new PrintWriter("benchmarks/compression_time_berkeleyDB.txt", "UTF-8");
 			// Open the environment. Create it if it does not already exist.
 			EnvironmentConfig envConfig = new EnvironmentConfig();
 			envConfig.setAllowCreate(true);
@@ -197,10 +197,6 @@ public class CompressedStorage extends AbstractStorage {
 
 	/**
 	 * Encode the list of ancestors and the list of successors of each node in a file called textfile_ancestor_successor_compressed.txt
-	 * @param ancestorSuccessorList
-	 * @param textfile The name of the text file issued by SPADE without the extension
-	 * @param W Window or number of nodes with successors to keep in memory and look at as a possible reference
-	 * @param L Maximum number of layers i.e. of lines you have to decode to be able to fully read the successors list of one node.
 	 * @throws FileNotFoundException
 	 * @throws UnsupportedEncodingException
 	 */
@@ -548,7 +544,7 @@ public class CompressedStorage extends AbstractStorage {
 	//String aux = sc.nextLine();
 	//Integer lineID = Integer.parseInt(aux.substring(0, aux.indexOf(" ")));
 	//if (lineID.equals(id)) { 
-	String aux = get(scaffoldDatabase, id);
+	String aux = getAnnotation(scaffoldDatabase, id);
 	if(aux != null) {
 		System.out.println("ca marche");
 		// split the line in two parts : ancestor list and successor list.
@@ -807,7 +803,7 @@ public class CompressedStorage extends AbstractStorage {
 				//System.out.println(compressedDataLength);
 				/*	DatabaseEntry key = new DatabaseEntry(toCompress.substring(toCompress.indexOf('(')+1, toCompress.indexOf(')')).getBytes("UTF-8"));
 			DatabaseEntry data = new DatabaseEntry();
-			annotationsDatabase.get(null, key, data, LockMode.DEFAULT);
+			annotationsDatabase.getAnnotation(null, key, data, LockMode.DEFAULT);
 			DatabaseEntry data2;
 			if (data.getSize()>0){
 				byte[] previousValue = data.getData();
@@ -860,9 +856,9 @@ public class CompressedStorage extends AbstractStorage {
 		Inflater decompresser = new Inflater();
 		/*DatabaseEntry key = new DatabaseEntry(toDecode.toString().getBytes("UTF-8"));
 	DatabaseEntry data = new DatabaseEntry();
-	annotationsDatabase.get(null, key, data, LockMode.DEFAULT);*/
+	annotationsDatabase.getAnnotation(null, key, data, LockMode.DEFAULT);*/
 
-		//byte[] input = encoded.first().get(toDecode);
+		//byte[] input = encoded.first().getAnnotation(toDecode);
 		byte[] input = getBytes(annotationsDatabase, toDecode);
 		String outputString;
 		//if (data.getSize() == 0) {
@@ -883,7 +879,7 @@ public class CompressedStorage extends AbstractStorage {
 
 
 	/**
-	 * get the set of annotations of an edge
+	 * getAnnotation the set of annotations of an edge
 	 * @param node1 source vertex of the edge
 	 * @param node2 destination vertex of he edge
 	 * @return the set of annotations as a String
@@ -895,7 +891,7 @@ public class CompressedStorage extends AbstractStorage {
 		String key_s = node1.toString() + "->" + node2.toString();
 		/*DatabaseEntry key = new DatabaseEntry(key_s.getBytes("UTF-8"));
 	DatabaseEntry data = new DatabaseEntry();
-	annotationsDatabase.get(null, key, data, LockMode.DEFAULT);*/
+	annotationsDatabase.getAnnotation(null, key, data, LockMode.DEFAULT);*/
 		byte[] input = getBytes(annotationsDatabase, key_s);
 		String outputString;
 		//if (data.getSize() == 0) {
@@ -918,7 +914,7 @@ public class CompressedStorage extends AbstractStorage {
 
 	
 	/**
-	 * get the Time annotation of an edge
+	 * getAnnotation the Time annotation of an edge
 	 * @param node1 source vertex of the edge
 	 * @param node2 destination vertex of he edge
 	 * @return the time annotation as a String
@@ -1022,7 +1018,7 @@ public class CompressedStorage extends AbstractStorage {
 				for (Integer nodeID = id + 1; nodeID < id + W + 1; nodeID++) {
 					String line = get(scaffoldDatabase, nodeID);
 					if (line != null && line.contains("/")) {
-						// get reference and see if it is id.
+						// getAnnotation reference and see if it is id.
 						String ancestorList = line.substring(line.indexOf(' ')+1, line.indexOf("/") - 1);
 						boolean isReferenceAncestor;
 						if (ancestorList.contains("_")) {
@@ -1253,7 +1249,7 @@ public class CompressedStorage extends AbstractStorage {
 		return null;
 	}
 	/**
-	 * get the lineage of a vertex choosing the depth and the direction, like getLineage in spade.querry.scaffold
+	 * getAnnotation the lineage of a vertex choosing the depth and the direction, like getLineage in spade.querry.scaffold
 	 * @param hash
 	 * @param direction
 	 * @param maxDepth

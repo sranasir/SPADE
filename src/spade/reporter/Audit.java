@@ -4063,7 +4063,7 @@ public class Audit extends AbstractReporter {
 	 * 
 	 * 1) If path absolute then return that path
 	 * 2) If path not absolute and fd == AT_FDCWD and cwd != null then concatenate cwd with path and return that
-	 * 3) If path not absolute and fd is a valid existing FILE descriptor then get the path from fd, concatenate 
+	 * 3) If path not absolute and fd is a valid existing FILE descriptor then get the path from fd, concatenate
 	 * this path from fd and the passed path and return that.
 	 * 
 	 * @param path path of the file as gotten in the audit log
@@ -4412,7 +4412,7 @@ public class Audit extends AbstractReporter {
 	}
 
 	/**
-	 * Convenience function to get a new map with the existing key-values and given key-values replaced. 
+	 * Convenience function to get a new map with the existing key-values and given key-values replaced.
 	 * 
 	 * @param keyValues existing key-values
 	 * @param newKeyValues key-values to update or replace

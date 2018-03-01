@@ -9,13 +9,15 @@ import spade.core.AbstractEdge;
 import spade.core.AbstractVertex;
 import spade.core.Graph;
 import spade.storage.CompressedStorage;
+import spade.storage.CompressedStorageSQL;
 import spade.storage.TextFile;
 
 public class Benchmarks {
 
 	public static void main(String[] args) {
 		
-		//benchmarksCompressedStorage();
+		benchmarksCompressedStorage();
+//		benchmarksTextfile();
 
 
         
@@ -42,9 +44,10 @@ public class Benchmarks {
 
 	
 	public static void benchmarksCompressedStorage() {
-		CompressedStorage storage = new CompressedStorage();
-		storage.initialize("/Users/melanie/Documents/benchmarks");
-        Graph graph = Graph.importGraph("/Users/melanie/Documents/benchmarks/workload.dot");
+		CompressedStorageSQL storage = new CompressedStorageSQL();
+//		CompressedStorage storage = new CompressedStorage();
+		storage.initialize("benchmarks");
+        Graph graph = Graph.importGraph("benchmarks/workload.dot");
         System.out.println("starting putVertex");
         //int count = 0;
         long aux = System.currentTimeMillis();
@@ -64,7 +67,10 @@ public class Benchmarks {
             //System.out.print(count + " ");
             //count ++;
         }
-        System.out.println(storage.uncompressAncestorsSuccessorsWithLayer(12, true, true).second().second().toString());
+		storage.benchmarks.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+		System.out.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+
+		System.out.println(storage.uncompressAncestorsSuccessorsWithLayer(12, true, true).second().second().toString());
         /*try {
 			System.out.println(storage.getTime(39363, 39011));
 		} catch (UnsupportedEncodingException | DataFormatException e1) {
@@ -73,10 +79,10 @@ public class Benchmarks {
 		}*/
        
         System.out.println("start querying");
-        File file = new File("/Users/melanie/Documents/benchmarks/hashes.scaffold");
+        File file = new File("benchmarks/hashes.scaffold");
         
         try {
-        	PrintWriter query = new PrintWriter("/Users/melanie/Documents/benchmarks/query_time.txt");
+        	PrintWriter query = new PrintWriter("benchmarks/query_time.txt");
         	long query_time = 0;
 			Scanner sc = new Scanner(file);
 			int countLines = 0;
@@ -102,8 +108,10 @@ public class Benchmarks {
 	
 	public static void benchmarksTextfile() {
 		TextFile storage = new TextFile();
-		storage.initialize("/Users/melanie/Documents/benchmarks/TextFile/storage.txt");
-        Graph graph = Graph.importGraph("/Users/melanie/Documents/benchmarks/workload.dot");
+		storage.initialize("benchmark.txt");
+        Graph graph = Graph.importGraph("benchmarks/workload.dot");
+        System.out.println("Total Vertices: " + graph.vertexSet().size());
+        System.out.println("Total Edges: " + graph.edgeSet().size());
         System.out.println("starting putVertex");
         //int count = 0;
         long aux = System.currentTimeMillis();
@@ -122,7 +130,7 @@ public class Benchmarks {
             //count ++;
         }
         System.out.println("Time to put all edges in the database (ms): " + (System.currentTimeMillis() - aux));
-       
+		System.exit(0);
         System.out.println("start querying");
         File file = new File("/Users/melanie/Documents/benchmarks/hashes.scaffold");
         
