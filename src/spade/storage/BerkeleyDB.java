@@ -219,6 +219,11 @@ public class BerkeleyDB extends AbstractStorage
             // Insert it in database
             myDatabase.put(null, key, data);
 
+            if(USE_SCAFFOLD)
+            {
+                insertScaffoldEntry(incomingEdge);
+            }
+
             return true;
         }
         catch (UnsupportedEncodingException ex)

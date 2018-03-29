@@ -1,5 +1,6 @@
 package spade.storage;
 
+import au.com.bytecode.opencsv.CSVWriter;
 import com.sleepycat.je.utilint.Pair;
 import spade.core.AbstractEdge;
 import spade.core.AbstractStorage;
@@ -8,6 +9,7 @@ import spade.core.Graph;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.io.UnsupportedEncodingException;
 import java.sql.DriverManager;
@@ -15,9 +17,11 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Connection;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
@@ -30,13 +34,13 @@ import java.util.logging.Logger;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
+import java.util.AbstractMap.SimpleEntry;
 
 public class CompressedStorageSQL extends AbstractStorage
 {
     private Connection dbConnectionScaffold;
     private Connection dbConnectionAnnotations;
 
-    private static String directoryPath = null;
     static Integer nextVertexID;
     public static Integer W;
     public static Integer L;
@@ -46,8 +50,15 @@ public class CompressedStorageSQL extends AbstractStorage
     static Map<Integer, String> idToHash;
     static int edgesInMemory;
     static int maxEdgesInMemory = 10000;
-    Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> scaffoldInMemory;
-    Map<String, String> scaffoldCache;
+    private boolean bulkScaffold = true;
+    private int scaffoldEntryCount = 0;
+    Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> uncompressedScaffold;
+    public Map<String, String> compressedScaffold;
+    private final int GLOBAL_TX_SIZE = 10000;
+    List<SimpleEntry<String, String>> scaffoldCache = new ArrayList<>(GLOBAL_TX_SIZE + 1);
+    private static String SCAFFOLD_TABLE = "scaffold";
+    private static String ANNOTATIONS_TABLE = "annotations";
+    private static String[] scaffoldColumns = {"key", "value"};
     private static final Logger logger = Logger.getLogger(CompressedStorage.class.getName());
     public long clockScaffold;
     public long clockAnnotations;
@@ -55,6 +66,8 @@ public class CompressedStorageSQL extends AbstractStorage
     public static long scaffoldTime;
     public static long annotationsTime;
     public static int countUpdates;
+    public static int compressedScaffoldHits = 0;
+    public static int getScaffolds = 0;
 
     /**
      * This method is invoked by the kernel to initialize the storage.
@@ -70,12 +83,12 @@ public class CompressedStorageSQL extends AbstractStorage
         scaffoldTime = 0;
         clockScaffold = 0;
         clockAnnotations = 0;
-        scaffoldInMemory = new HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>>();
-        scaffoldCache = new HashMap<>();
+        uncompressedScaffold = new HashMap<>();
+        compressedScaffold = new HashMap<>();
         edgesInMemory = 0;
-        hashToID = new HashMap<String, Integer>();
-        idToHash = new HashMap<Integer, String>();
-        alreadyRenamed = new Vector<String>();
+        hashToID = new HashMap<>();
+        idToHash = new HashMap<>();
+        alreadyRenamed = new Vector<>();
         compresser = new Deflater(Deflater.BEST_COMPRESSION);
         W=10;
         L=5;
@@ -85,9 +98,10 @@ public class CompressedStorageSQL extends AbstractStorage
             benchmarks = new PrintWriter("benchmarks/compression_time_berkeleyDB.txt", "UTF-8");
             String databaseDriver = "org.postgresql.Driver";
             String databasePrefix = "jdbc:postgresql://localhost:5432/";
+            String databaseSuffix = "_4m";
             // for postgres, it is jdbc:postgres://localhost/database_name
             // for h2, it is jdbc:h2:/tmp/spade.sql
-            String databaseURL = databasePrefix + "scaffold";
+            String databaseURL = databasePrefix + "scaffold" + databaseSuffix;
             String databaseUsername = "raza";
             String databasePassword = "12345";
 
@@ -105,7 +119,7 @@ public class CompressedStorageSQL extends AbstractStorage
             dbStatementScaffold.execute(createScaffoldTable);
             dbStatementScaffold.close();
 
-            databaseURL = databasePrefix + "annotations";
+            databaseURL = databasePrefix + "annotations" + databaseSuffix;
             dbConnectionAnnotations = DriverManager.getConnection(databaseURL, databaseUsername, databasePassword);
             dbConnectionAnnotations.setAutoCommit(false);
 
@@ -128,7 +142,6 @@ public class CompressedStorageSQL extends AbstractStorage
         }
     }
 
-
     /**
      * This method is invoked by the kernel to shut down the storage.
      *
@@ -136,14 +149,17 @@ public class CompressedStorageSQL extends AbstractStorage
      */
     public boolean shutdown()
     {
-        System.out.println("Average time to put 10000 edges in the annotations storage : " + annotationsTime);
-        System.out.println("Average time to put 10000 edges in the scaffold strage: " + scaffoldTime);
+        System.out.println("Total time to put edges in the annotations storage : " + annotationsTime);
+        System.out.println("Total time to put edges in the scaffold storage: " + scaffoldTime);
         try
         {
+            flushBulkScaffold(true);
             dbConnectionScaffold.commit();
             dbConnectionScaffold.close();
+
             dbConnectionAnnotations.commit();
             dbConnectionAnnotations.close();
+
             return true;
         }
         catch(Exception ex)
@@ -153,7 +169,6 @@ public class CompressedStorageSQL extends AbstractStorage
 
         return false;
     }
-
 
     /**
      * Create a hash map linking each node to its full list of ancestors and its full list of successors from the text file listing edges and vertexes issued by SPADE.
@@ -165,7 +180,7 @@ public class CompressedStorageSQL extends AbstractStorage
     public HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> createAncestorSuccessorList( String textfile) throws FileNotFoundException, UnsupportedEncodingException {
         File file = new File(textfile + ".txt");
         Scanner sc = new Scanner(file);
-        HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> ancestorsSuccessors = new  HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>>();
+        HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> ancestorsSuccessors = new HashMap<>();
         while(sc.hasNextLine()){
             String aux = sc.nextLine();
             if(aux.substring(0,4).equals("EDGE")){
@@ -178,8 +193,8 @@ public class CompressedStorageSQL extends AbstractStorage
                     partialLists.second().add(successor);
                     ancestorsSuccessors.replace(node, partialLists);
                 } else {
-                    SortedSet<Integer> partialSuccessorList = new TreeSet<Integer>();
-                    SortedSet<Integer> partialAncestorList = new TreeSet<Integer>();
+                    SortedSet<Integer> partialSuccessorList = new TreeSet<>();
+                    SortedSet<Integer> partialAncestorList = new TreeSet<>();
                     partialSuccessorList.add(successor);
                     Pair<SortedSet<Integer>, SortedSet<Integer>> partialLists = new Pair<SortedSet<Integer>, SortedSet<Integer>>(partialAncestorList, partialSuccessorList);
                     ancestorsSuccessors.put(node, partialLists);
@@ -230,8 +245,8 @@ public class CompressedStorageSQL extends AbstractStorage
         SortedSet<Integer> ancestors = nodeToCompress.getValue().first();
         SortedSet<Integer> successors = nodeToCompress.getValue().second();
         //NodeLayerAncestorSuccessor currentNode = new NodeLayerAncestorSuccessor(id, ancestors, successors);
-        Pair<Integer, Integer> maxNodesInCommonAncestor = new Pair<Integer, Integer>(0,0);
-        Pair<Integer, Integer> maxNodesInCommonSuccessor = new Pair<Integer, Integer>(0,0); //first integer is the max of nodes in common, the second one is the number of 0 in the corresponding bit list
+        Pair<Integer, Integer> maxNodesInCommonAncestor = new Pair<>(0, 0);
+        Pair<Integer, Integer> maxNodesInCommonSuccessor = new Pair<>(0, 0); //first integer is the max of nodes in common, the second one is the number of 0 in the corresponding bit list
         //NodeLayerAncestorSuccessor referenceAncestor = currentNode;
         String bitlistAncestor = "";
         int layerAncestor = 1;
@@ -286,7 +301,7 @@ public class CompressedStorageSQL extends AbstractStorage
         //System.out.println("step 6");
 
         //encode ancestor list
-        SortedSet<Integer> remainingNodesAncestor = new TreeSet<Integer>();
+        SortedSet<Integer> remainingNodesAncestor = new TreeSet<>();
         remainingNodesAncestor.addAll(ancestors);
         //encode reference
         //String encoding = id.toString() + " ";
@@ -319,7 +334,7 @@ public class CompressedStorageSQL extends AbstractStorage
 
         }
         // encode successor list
-        SortedSet<Integer> remainingNodesSuccessor = new TreeSet<Integer>();
+        SortedSet<Integer> remainingNodesSuccessor = new TreeSet<>();
         remainingNodesSuccessor.addAll(successors);
         //encode reference
         encoding = encoding + " / " + layerSuccessor + " ";
@@ -360,7 +375,7 @@ public class CompressedStorageSQL extends AbstractStorage
     public  Pair<Pair<Integer, SortedSet<Integer>>, Pair<Integer, SortedSet<Integer>>> uncompressAncestorsSuccessorsWithLayer(
             Integer id, boolean uncompressAncestors, boolean uncompressSuccessors) {
         //System.out.println("step a");
-        SortedSet<Integer> ancestors = new TreeSet<Integer>();
+        SortedSet<Integer> ancestors = new TreeSet<>();
         SortedSet<Integer> successors = new TreeSet<Integer>();
         Integer ancestorLayer = 1;
         Integer successorLayer = 1;
@@ -448,17 +463,86 @@ public class CompressedStorageSQL extends AbstractStorage
         return new Pair<Pair<Integer, Integer>, String>(count, bitlist);
     }
 
+    public boolean flushBulkScaffold(boolean forcedFlush)
+    {
+        if((scaffoldEntryCount > 0 && (scaffoldEntryCount % GLOBAL_TX_SIZE == 0)) || forcedFlush)
+        {
+            String scaffoldFileName = "/tmp/bulkScaffold.csv";
+            try
+            {
+                File scaffoldFile = new File(scaffoldFileName);
+                scaffoldFile.createNewFile();
+                if(!(scaffoldFile.setWritable(true, false)
+                        && scaffoldFile.setReadable(true, false)))
+                {
+                    logger.log(Level.SEVERE, "Permission denied to read/write from scaffold buffer file");
+                    return false;
+                }
+                FileWriter fileWriter = new FileWriter(scaffoldFile);
+                CSVWriter csvWriter = new CSVWriter(fileWriter);
+                csvWriter.writeNext(scaffoldColumns);
+                for(Map.Entry<String, String> entry: scaffoldCache)
+                {
+                    String key = entry.getKey();
+                    String value = entry.getValue();
+                    String[] scaffoldEntry = {key, value};
+                    csvWriter.writeNext(scaffoldEntry);
+                }
+                csvWriter.close();
+                scaffoldCache.clear();
+                String copyScaffoldQuery = "COPY "
+                        + SCAFFOLD_TABLE
+                        + " FROM '"
+                        + scaffoldFileName
+                        + "' CSV HEADER;";
+
+                Statement statement = dbConnectionScaffold.createStatement();
+                statement.execute(copyScaffoldQuery);
+                statement.close();
+                dbConnectionScaffold.commit();
+            }
+            catch(Exception ex)
+            {
+                logger.log(Level.SEVERE, null, ex);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean processBulkScaffold(String key, String value)
+    {
+        try
+        {
+            scaffoldCache.add(new SimpleEntry<>(key, value));
+            scaffoldEntryCount++;
+
+            return flushBulkScaffold(false);
+        }
+        catch(Exception ex)
+        {
+            logger.log(Level.SEVERE, "Error processing bulk scaffold", ex);
+            return false;
+        }
+    }
+
     private boolean putScaffold(String key, String value)
     {
         try
         {
-            scaffoldCache.put(key, value);
-            String sqlStatement = "INSERT INTO scaffold VALUES('" + key + "', '" + value + "');";
-            dbConnectionScaffold.commit();
-            Statement statement = dbConnectionScaffold.createStatement();
-            statement.execute(sqlStatement);
-            statement.close();
-
+            if(value != null)
+            {
+                compressedScaffold.put(key, value);
+                if(bulkScaffold)
+                {
+                    return processBulkScaffold(key, value);
+                }
+                String sqlStatement = "INSERT INTO scaffold VALUES('" + key + "', '" + value + "');";
+                dbConnectionScaffold.commit();
+                Statement statement = dbConnectionScaffold.createStatement();
+                statement.execute(sqlStatement);
+                statement.close();
+            }
             return true;
         }
         catch (Exception ex)
@@ -491,23 +575,27 @@ public class CompressedStorageSQL extends AbstractStorage
     {
         try
         {
-            String value = scaffoldCache.get(key);
+            getScaffolds++;
+            String value = compressedScaffold.get(key);
             if(value != null)
             {
+                compressedScaffoldHits++;
                 return value;
             }
-            String sqlStatement = "SELECT * FROM scaffold WHERE key='" + key + "';";
-            dbConnectionScaffold.commit();
-            Statement statement = dbConnectionScaffold.createStatement();
-            ResultSet result = statement.executeQuery(sqlStatement);
-            while (result.next())
-            {
-                value = result.getString(2);
-                return value;
-            }
-
-            statement.close();
-
+//            System.out.println("key: " + key + ", value: " + value);
+//            String sqlStatement = "SELECT * FROM scaffold WHERE key='" + key + "';";
+//            dbConnectionScaffold.commit();
+//            Statement statement = dbConnectionScaffold.createStatement();
+//            ResultSet result = statement.executeQuery(sqlStatement);
+//            while (result.next())
+//            {
+//                value = result.getString(2);
+//                if(value != null)
+//                    System.out.println("key: " + key + ", value: " + value);
+//                return value;
+//            }
+//
+//            statement.close();
         }
         catch(Exception ex)
         {
@@ -836,8 +924,8 @@ public class CompressedStorageSQL extends AbstractStorage
 
     /**
      * getAnnotation the set of annotations of an edge
-     * @param node1 source vertex of the edge
-     * @param node2 destination vertex of he edge
+     * @param node1 child vertex of the edge
+     * @param node2 parent vertex of he edge
      * @return the set of annotations as a String
      * @throws DataFormatException
      * @throws UnsupportedEncodingException
@@ -856,8 +944,8 @@ public class CompressedStorageSQL extends AbstractStorage
 
     /**
      * getAnnotation the Time annotation of an edge
-     * @param node1 source vertex of the edge
-     * @param node2 destination vertex of he edge
+     * @param node1 child vertex of the edge
+     * @param node2 parent vertex of he edge
      * @return the time annotation as a String
      * @throws UnsupportedEncodingException
      * @throws DataFormatException
@@ -1020,13 +1108,13 @@ public class CompressedStorageSQL extends AbstractStorage
     @Override
     public boolean putEdge(AbstractEdge incomingEdge) {
         try {
-            String srcHash = incomingEdge.getChildVertex().bigHashCode();
-            String dstHash = incomingEdge.getParentVertex().bigHashCode();
-            Integer srcID = hashToID.get(srcHash);
-            Integer dstID = hashToID.get(dstHash);
+            String childHash = incomingEdge.getChildVertex().bigHashCode();
+            String parentHash = incomingEdge.getParentVertex().bigHashCode();
+            Integer childID = hashToID.get(childHash);
+            Integer parentID = hashToID.get(parentHash);
             long auxClock = System.nanoTime();
             StringBuilder annotationString = new StringBuilder();
-            //annotationString.append("EDGE (" + srcId + " -> " + dstId + "): {");
+            //annotationString.append("EDGE (" + childId + " -> " + parentId + "): {");
             for (Map.Entry<String, String> currentEntry : incomingEdge.getAnnotations().entrySet()) {
                 String key = currentEntry.getKey();
                 String value = currentEntry.getValue();
@@ -1046,39 +1134,39 @@ public class CompressedStorageSQL extends AbstractStorage
             compresser.setInput(input);
             compresser.finish();
             int compressedDataLength = compresser.deflate(output);
-            String key = srcID + "->" + dstID;
+            String key = childID + "->" + parentID;
             putAnnotation(key, output.toString());
             compresser.reset();
             long auxClock2 = System.nanoTime();
             clockAnnotations = clockAnnotations + auxClock2-auxClock;
             // scaffold storage
-            //update scaffoldInMemory
-            Pair<SortedSet<Integer>, SortedSet<Integer>> srcLists = scaffoldInMemory.get(srcID);
-            if (srcLists == null) {
-                srcLists = new Pair<SortedSet<Integer>, SortedSet<Integer>>(new TreeSet<Integer>(), new TreeSet<Integer>());
+            //update uncompressedScaffold
+            Pair<SortedSet<Integer>, SortedSet<Integer>> childLists = uncompressedScaffold.get(childID);
+            if (childLists == null) {
+                childLists = new Pair<SortedSet<Integer>, SortedSet<Integer>>(new TreeSet<Integer>(), new TreeSet<Integer>());
             }
-            srcLists.second().add(dstID);
-            scaffoldInMemory.put(srcID, srcLists);
-            Pair<SortedSet<Integer>, SortedSet<Integer>> dstLists = scaffoldInMemory.get(dstID);
-            if (dstLists == null) {
-                dstLists = new Pair<SortedSet<Integer>, SortedSet<Integer>>(new TreeSet<Integer>(), new TreeSet<Integer>());
+            childLists.second().add(parentID);
+            uncompressedScaffold.put(childID, childLists);
+            Pair<SortedSet<Integer>, SortedSet<Integer>> parentLists = uncompressedScaffold.get(parentID);
+            if (parentLists == null) {
+                parentLists = new Pair<SortedSet<Integer>, SortedSet<Integer>>(new TreeSet<Integer>(), new TreeSet<Integer>());
             }
-            dstLists.first().add(dstID);
-            scaffoldInMemory.put(dstID, dstLists);
+            parentLists.first().add(parentID);
+            uncompressedScaffold.put(parentID, parentLists);
             edgesInMemory++;
             long auxClock3 = System.nanoTime();
             clockScaffold = clockScaffold + auxClock3 - auxClock2;
             if(edgesInMemory % maxEdgesInMemory == 0) {
                 countUpdates ++;
-                benchmarks.println("Time to putAnnotation 10000 edges in annotationsStorage (ns): " + clockAnnotations );
+                benchmarks.println("Time to put 10000 edges in annotationsStorage (ns): " + clockAnnotations);
                 annotationsTime += clockAnnotations;
                 clockAnnotations = 0;
                 long auxClock4 = System.nanoTime();
-                updateAncestorsSuccessors(scaffoldInMemory);
-                scaffoldInMemory.clear();
+                updateAncestorsSuccessors(uncompressedScaffold);
+                uncompressedScaffold.clear();
                 long auxClock5 = System.nanoTime();
                 clockScaffold = clockScaffold + auxClock5 - auxClock4;
-                benchmarks.println("Time to putAnnotation 10000 edges in scaffoldStorage (ns): " + clockScaffold);
+                benchmarks.println("Time to put 10000 edges in scaffoldStorage (ns): " + clockScaffold);
                 scaffoldTime += clockScaffold;
                 clockScaffold = 0;
             }

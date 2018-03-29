@@ -30,7 +30,8 @@ import spade.core.Edge;
 import spade.core.Graph;
 import spade.core.Vertex;
 import spade.query.scaffold.Scaffold;
-import spade.storage.SQL;
+import spade.query.scaffold.ScaffoldFactory;
+import spade.storage.PostgreSQL;
 
 import java.sql.SQLException;
 
@@ -41,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @author Raza Ahmad
  */
 class SQLTest {
-    private static final SQL testSQLObject = new SQL();
+    private static final AbstractStorage testSQLObject = new PostgreSQL();
     private static Graph graph = new Graph();
 
 
@@ -159,7 +160,7 @@ class SQLTest {
         if(!testSQLObject.initialize(connectionString))
             throw new SQLException();
 
-        Scaffold scaffold = new Scaffold();
+        Scaffold scaffold = ScaffoldFactory.createDefaultScaffold();
         scaffold.initialize("/tmp");
         AbstractStorage.setScaffold(scaffold);
         testSQLObject.putEdge(e1);

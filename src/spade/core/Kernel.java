@@ -75,11 +75,13 @@ public class Kernel
 	static
     {
 		System.setProperty("java.util.logging.manager", spade.utility.LogManager.class.getName());
+		System.setProperty("java.util.logging.SimpleFormatter.format", "%1\\$tY-%1\\$tm-%1\\$td %1\\$tH:%1\\$tM:%1\\$tS %4\\$s %2\\$s %5\\$s%6\\$s%n");
 	}
 
-    private static final String SPADE_ROOT = Settings.getProperty("spade_root");
+    public static final String SPADE_ROOT = Settings.getProperty("spade_root");
     public static final String FILE_SEPARATOR = String.valueOf(File.separatorChar);
 
+    public static final String DB_ROOT = SPADE_ROOT + "db" + FILE_SEPARATOR;
     /**
      * Path to log files including the prefix.
      */
@@ -93,7 +95,7 @@ public class Kernel
      * Path to configuration file for storing state of SPADE instance (includes
      * currently added modules).
      */
-    private static final String CONFIG_FILE = CONFIG_PATH + FILE_SEPARATOR + "spade.config";
+    private static final String CONFIG_FILE = CONFIG_PATH + FILE_SEPARATOR + "spade.client.Control.config";
     /**
      * Paths to key stores.
      */
@@ -122,6 +124,20 @@ public class Kernel
      * Set of storages active on the local SPADE instance.
      */
     public static Set<AbstractStorage> storages;
+
+    public static AbstractStorage getStorage(String storageName)
+    {
+        for(AbstractStorage storage : storages)
+        {
+            // Search for the given storage in the storages set.
+            if(storage.getClass().getSimpleName().equalsIgnoreCase(storageName))
+            {
+                return storage;
+            }
+        }
+
+        return null;
+    }
     /**
      * Set of filters active on the local SPADE instance.
      */
@@ -302,7 +318,6 @@ public class Kernel
         sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), secureRandom);
         sslServerSocketFactory = sslContext.getServerSocketFactory();
     }
-
 
     public static void addServerSocket(ServerSocket socket)
     {
@@ -700,7 +715,6 @@ public class Kernel
         string.append("\t" + ADD_REPORTER_STORAGE_STRING + "\n");
         string.append("\t" + ADD_ANALYZER_SKETCH_STRING + "\n");
         string.append("\t" + ADD_FILTER_TRANSFORMER_STRING + "\n");
-        string.append("\t" + ADD_ANALYZER_SKETCH_STRING + "\n");
         string.append("\t" + REMOVE_REPORTER_STORAGE_SKETCH_ANALYZER_STRING + "\n");
         string.append("\t" + REMOVE_FILTER_TRANSFORMER_STRING + "\n");
         string.append("\t" + LIST_STRING + "\n");
@@ -861,15 +875,21 @@ public class Kernel
                 arguments = (tokens.length == 3) ? null : tokens[3];
                 logger.log(Level.INFO, "Adding storage: {0}", className);
                 outputStream.print("Adding storage " + className + "... ");
-                AbstractStorage storage;
+                AbstractStorage storage = null;
                 try
                 {
                     storage = (AbstractStorage) Class.forName("spade.storage." + className).newInstance();
                 }
-                catch (ClassNotFoundException | InstantiationException | IllegalAccessException ex)
+                catch (Exception ex)
                 {
-                    outputStream.println("error: Unable to find/load class");
+                    outputStream.println("Unable to find/load class");
                     logger.log(Level.SEVERE, null, ex);
+                    return;
+                }
+                catch(Error er)
+                {
+                    outputStream.println("Unable to find/load class");
+                    logger.log(Level.SEVERE, "Unable to find/load class", er);
                     return;
                 }
                 if (storage.initialize(arguments))
@@ -1490,6 +1510,11 @@ public class Kernel
         for (AbstractStorage storage : storages)
         {
             storage.shutdown();
+        }
+        // Shut down analzers.
+        for(AbstractAnalyzer analyzer: analyzers)
+        {
+            analyzer.shutdown();
         }
 
         // Shut down server sockets.

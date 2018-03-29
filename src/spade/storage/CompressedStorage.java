@@ -90,7 +90,7 @@ public class CompressedStorage extends AbstractStorage {
 			// Open the environment. Create it if it does not already exist.
 			EnvironmentConfig envConfig = new EnvironmentConfig();
 			envConfig.setAllowCreate(true);
-			DatabaseEnvironment1 = new Environment(new File(filePath + "/scaffold"), 
+			DatabaseEnvironment1 = new Environment(new File(filePath + "/scaffold"),
 					envConfig);
 			DatabaseEnvironment2 = new Environment(new File(filePath + "/annotations"), 
 					envConfig);
