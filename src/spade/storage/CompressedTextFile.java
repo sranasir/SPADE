@@ -19,10 +19,8 @@
  */
 package spade.storage;
 
-import org.apache.commons.codec.digest.DigestUtils;
-
 import com.sleepycat.je.utilint.Pair;
-
+import org.apache.commons.codec.digest.DigestUtils;
 import spade.core.AbstractEdge;
 import spade.core.AbstractStorage;
 import spade.core.AbstractVertex;
@@ -64,7 +62,7 @@ public class CompressedTextFile extends AbstractStorage {
 	static Integer edgesInMemory;
 	static final Integer maxEdgesInMemory = 10;
 	Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> scaffoldInMemory;
-	private static final Logger logger = Logger.getLogger(CompressedStorage.class.getName());
+	private static final Logger logger = Logger.getLogger(CompressedBerkeleyDB.class.getName());
 	long clock;
 	PrintWriter benchmarks;
 	File annotationsFile;

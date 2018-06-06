@@ -3,21 +3,26 @@ import spade.core.AbstractStorage;
 import spade.core.AbstractVertex;
 import spade.core.Graph;
 import spade.storage.BerkeleyDB;
+import spade.storage.CompressedBerkeleyDB;
+import spade.storage.CompressedSQL;
 import spade.storage.CompressedStorage;
-import spade.storage.CompressedStorageSQL;
 import spade.storage.PostgreSQL;
 import spade.storage.TextFile;
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
-import java.util.Scanner;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
-public class Benchmarks {
+public class Benchmarks
+{
 
-	public static void main(String[] args) {
+	public static void main(String[] args)
+    {
 		
 		benchmarksCompressedStorage();
 //		benchmarksTextfile();
@@ -66,7 +71,7 @@ public class Benchmarks {
                 hashes.add(v.bigHashCode());
             count++;
         }
-        System.out.println("Time to put all vertices in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+        System.out.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
 
         aux = System.currentTimeMillis();
         for (AbstractEdge e : graph.edgeSet())
@@ -74,9 +79,10 @@ public class Benchmarks {
             storage.putEdge(e);
         }
         storage.scaffold.globalTxCheckin(true);
-        System.out.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+        System.out.println("Time to put all edges in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
 
-        try {
+        try
+        {
             PrintWriter query = new PrintWriter("benchmarks/query_time.txt");
             long query_time = 0;
             int countLines = 0;
@@ -89,10 +95,10 @@ public class Benchmarks {
                 query.println(aux_query2 - aux_query1);
                 query_time += aux_query2 - aux_query1;
             }
-            System.out.println("Average query time (ns) : " + (query_time/countLines));
+            System.out.println("Average query time: " + 1.*(query_time/countLines)/1e9);
         }
-        catch (Exception ex) {
-            // TODO Auto-generated catch block
+        catch (Exception ex)
+        {
             ex.printStackTrace();
         }
     }
@@ -115,7 +121,7 @@ public class Benchmarks {
                 hashes.add(v.bigHashCode());
             count++;
         }
-        System.out.println("Time to put all vertices in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+        System.out.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
 
         aux = System.currentTimeMillis();
         for (AbstractEdge e : graph.edgeSet())
@@ -123,9 +129,10 @@ public class Benchmarks {
             storage.putEdge(e);
         }
         storage.scaffold.globalTxCheckin(true);
-        System.out.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
+        System.out.println("Time to put all edges in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
 
-        try {
+        try
+        {
             PrintWriter query = new PrintWriter("benchmarks/query_time.txt");
             long query_time = 0;
             int countLines = 0;
@@ -140,74 +147,92 @@ public class Benchmarks {
             }
             System.out.println("Average query time (ns) : " + (query_time/countLines));
         }
-        catch (Exception ex) {
-            // TODO Auto-generated catch block
+        catch (Exception ex)
+        {
             ex.printStackTrace();
         }
     }
 	
-	public static void benchmarksCompressedStorage() {
-		CompressedStorage storage = new CompressedStorage();
-//		CompressedStorageSQL storage = new CompressedStorageSQL();
+	public static void benchmarksCompressedStorage()
+    {
+		CompressedStorage storage = new CompressedBerkeleyDB();
+//		CompressedStorage storage = new CompressedSQL();
 		storage.initialize("benchmarks");
 		String workload_file = "benchmarks/audit.log4m.dot";
         Graph graph = Graph.importGraph(workload_file);
-        Set<String> hashes = new HashSet<>(1000+1, 1);
+        int query_sample_size = 1000;
+        Set<String> hashes = new HashSet<>(query_sample_size + 1, 1);
         int count = 0;
         long aux = System.currentTimeMillis();
-        for (AbstractVertex v : graph.vertexSet()) {
+        long ingestion_start_time = System.nanoTime();
+        for (AbstractVertex v : graph.vertexSet())
+        {
             storage.putVertex(v);
-            if(count < 1000)
+            if(count < query_sample_size)
                 hashes.add(v.bigHashCode());
             count++;
-            //System.out.print(count + " ");
-            //count ++;
         }
-        storage.benchmarks.println("Time to put all vertices in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
-        System.out.println("Time to put all vertices in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
-        //count = 0;
+        storage.benchmarks.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
+        System.out.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
         aux = System.currentTimeMillis();
-        
-        for (AbstractEdge e : graph.edgeSet()) {
+
+        for (AbstractEdge e : graph.edgeSet())
+        {
             storage.putEdge(e);
-            //System.out.print(count + " ");
-            //count ++;
         }
-//        storage.flushBulkScaffold(true);
-		storage.benchmarks.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
-		System.out.println("Time to put all edges in the annotations Database (ms): " + (System.currentTimeMillis() - aux));
-//		System.out.println("compressedScaffold.size: " + storage.compressedScaffold.size());
+
+        long totalIngestionTime = (System.nanoTime() - ingestion_start_time);
+        storage.compressionTimeForIngestion = totalIngestionTime - storage.storageTimeForIngestion;
+        storage.ingestionPeriod = false;
+		storage.benchmarks.println("Time to put all edges in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
+		System.out.println("Time to put all edges in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
+
+//		System.out.println("adjacencyListCache.size: " + storage.adjacencyListCache.size());
 //		System.out.println("getScaffolds: " + storage.getScaffolds);
-//		System.out.println("compressedScaffoldHits: " + storage.compressedScaffoldHits);
-//		System.out.println("Hit Ratio: " + 1.*storage.compressedScaffoldHits / storage.getScaffolds);
+//		System.out.println("adjacencyListCacheHits: " + storage.adjacencyListCacheHits);
+//		System.out.println("Hit Ratio: " + 1.*storage.adjacencyListCacheHits / storage.getScaffolds);
 
-//		System.out.println(storage.uncompressAncestorsSuccessorsWithLayer(12, true, true).second().second().toString());
-        /*try {
-			System.out.println(storage.getTime(39363, 39011));
-		} catch (UnsupportedEncodingException | DataFormatException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
-		}*/
-       
-//        File file = new File("benchmarks/hashes.scaffold");
-
-        try {
+        try
+        {
         	PrintWriter query = new PrintWriter("benchmarks/query_time.txt");
-        	long query_time = 0;
-//			Scanner sc = new Scanner(file);
-			int countLines = 0;
-			for(String hash: hashes)
+            List<Double> queryTimes = new ArrayList<>(query_sample_size);
+            Graph result = new Graph();
+            long total_query_time = 0;
+            String direction = "desc";
+            int maxDepth = 5;
+            storage.storageTimeForRetrieval = 0;
+            storage.storageTimeForRetrieval = 0;
+            for(String hash: hashes)
             {
-				countLines++;
-				long aux_query1 = System.nanoTime();
-				storage.getLineageMap(hash, "desc", 5);
-				long aux_query2 = System.nanoTime();
-				query.println(aux_query2 - aux_query1);
-				query_time += aux_query2 - aux_query1;
+				long query_clock = System.nanoTime();
+                Map<String, Set<String>> lineageMap = storage.getLineageMap(hash, direction, maxDepth);
+                result = storage.constructGraphFromLineageMap(lineageMap, direction);
+				long query_time = System.nanoTime() - query_clock;
+				total_query_time += query_time;
+				queryTimes.add(1.*query_time/1e9);
+                String result_stats = "Graph stats: vertices=" + result.vertexSet().size() + ", edges=" + result.edgeSet().size();
+//                System.out.println(result_stats);
+//                query.println(result_stats);
 			}
-			System.out.println("Average query time (ns) : " + (query_time/countLines));
-		} catch (FileNotFoundException e1) {
-			// TODO Auto-generated catch block
+			System.out.println("Average query time: " + 1.*(total_query_time/query_sample_size)/1e9);
+			query.println("Average query time: " + 1.*(total_query_time/query_sample_size)/1e9);
+            Collections.sort(queryTimes);
+            System.out.println(queryTimes.toString());
+            query.println(queryTimes.toString());
+
+            System.out.println("Total compressionTimeForIngestion: " + 1.*storage.compressionTimeForIngestion/1e9);
+            storage.benchmarks.println("Total compressionTimeForIngestion: " + 1.*storage.compressionTimeForIngestion/1e9);
+            System.out.println("Total storageTimeForIngestion: " + 1.*storage.storageTimeForIngestion/1e9);
+            storage.benchmarks.println("Total storageTimeForIngestion: " + 1.*storage.storageTimeForIngestion/1e9);
+
+            storage.compressionTimeForRetrieval = total_query_time - storage.storageTimeForRetrieval;
+            System.out.println("Total compressionTimeForRetrieval: " + 1.*storage.compressionTimeForRetrieval/1e9);
+            storage.benchmarks.println("Total compressionTimeForRetrieval: " + 1.*storage.compressionTimeForRetrieval/1e9);
+            System.out.println("Total storageTimeForRetrieval: " + 1.*storage.storageTimeForRetrieval/1e9);
+            storage.benchmarks.println("Total storageTimeForRetrieval: " + 1.*storage.storageTimeForRetrieval/1e9);
+		}
+		catch (FileNotFoundException e1)
+        {
 			e1.printStackTrace();
 		}
         //System.out.println(storage.uncompressAncestorsSuccessorsWithLayer(12, true, true).second().second().toString());
