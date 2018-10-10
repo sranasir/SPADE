@@ -36,11 +36,11 @@ public abstract class CompressedStorage extends AbstractStorage
     protected static Map<String, Integer> hashToID;
     protected static Map<Integer, String> idToHash;
     protected static int edgesInMemory;
-    protected static int maxEdgesInMemory = 1;    // TODO:assign to 1 for ignoring uncompressedBuffer
+    protected static int maxEdgesInMemory = 10000;    // TODO:assign to 1 for ignoring uncompressedBuffer
     protected static Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> uncompressedBuffer;
     protected static final Logger logger = Logger.getLogger(CompressedBerkeleyDB.class.getName());
-    protected static boolean useDeltaForRunLength = false;	// TODO: assign to false for using node ids in run length encoding
-    protected static boolean optimizeReferenceSelection = false;	//TODO: assign to false for normal reference selection
+    protected static boolean useDeltaForRunLength = true;    // TODO: assign to false for using node ids in run length encoding
+    protected static boolean optimizeReferenceSelection = true;    //TODO: assign to false for normal reference selection
     public Map<String, String> adjacencyListCache;
     protected boolean useAdjacencyListCache = false;   // TODO: assign to false to avoid building and using adjacencyListCache
     protected final int GLOBAL_TX_SIZE = 10000;
@@ -834,7 +834,7 @@ public abstract class CompressedStorage extends AbstractStorage
             long storageClock = System.nanoTime();
             putAnnotationEntry(key, output);
             storageTimeForIngestion += (System.nanoTime() - storageClock);
-            compressor.reset();
+//            compressor.reset();
 
             long auxClock2 = System.nanoTime();
             annotationsTime = annotationsTime + auxClock2-auxClock;
@@ -914,7 +914,7 @@ public abstract class CompressedStorage extends AbstractStorage
             long storageClock = System.nanoTime();
             putAnnotationEntry(vertexID.toString(), output);
             storageTimeForIngestion += (System.nanoTime() - storageClock);
-            compressor.reset();
+//            compressor.reset();
 
             return true;
         }

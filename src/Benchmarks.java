@@ -14,6 +14,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -155,9 +156,9 @@ public class Benchmarks
 	
 	public static void benchmarksCompressedStorage()
     {
-		CompressedStorage storage = new CompressedBerkeleyDB();
-//		CompressedStorage storage = new CompressedSQL();
-		storage.initialize("benchmarks");
+//		CompressedStorage storage = new CompressedBerkeleyDB();
+        CompressedStorage storage = new CompressedSQL();
+        storage.initialize("benchmarks");
 		String workload_file = "benchmarks/audit.log4m.dot";
         Graph graph = Graph.importGraph(workload_file);
         int query_sample_size = 1000;
@@ -174,11 +175,13 @@ public class Benchmarks
         }
         storage.benchmarks.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
         System.out.println("Time to put all vertices in the annotations Database: " + 1.*(System.currentTimeMillis() - aux)/1e3);
-        aux = System.currentTimeMillis();
 
+        count = 0;
+        aux = System.currentTimeMillis();
         for (AbstractEdge e : graph.edgeSet())
         {
             storage.putEdge(e);
+            count++;
         }
 
         long totalIngestionTime = (System.nanoTime() - ingestion_start_time);

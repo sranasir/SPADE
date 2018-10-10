@@ -46,9 +46,13 @@ public class CompressedBerkeleyDB extends CompressedStorage
 			// Open the environment. Create it if it does not already exist.
 			EnvironmentConfig envConfig = new EnvironmentConfig();
 			envConfig.setAllowCreate(true);
-			DatabaseEnvironment1 = new Environment(new File(filePath + "/scaffold"),
+			File scaffoldFile = new File(filePath + "/scaffold");
+			scaffoldFile.mkdirs();
+			DatabaseEnvironment1 = new Environment(scaffoldFile,
 					envConfig);
-			DatabaseEnvironment2 = new Environment(new File(filePath + "/annotations"), 
+			File annotationsFile = new File(filePath + "/annotations");
+			annotationsFile.mkdirs();
+			DatabaseEnvironment2 = new Environment(annotationsFile,
 					envConfig);
 			// Open the databases. Create it if it does not already exist.
 			DatabaseConfig DatabaseConfig1 = new DatabaseConfig();
