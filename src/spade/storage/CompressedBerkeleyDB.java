@@ -42,7 +42,7 @@ public class CompressedBerkeleyDB extends CompressedStorage
 		try
 		{
 			super.initialize(filePath);
-			benchmarks = new PrintWriter("benchmarks/compression_time_berkeleyDB.txt", "UTF-8");
+			filePrinter = new PrintWriter("benchmarks/compression_time_BerkeleyDB.txt", "UTF-8");
 			// Open the environment. Create it if it does not already exist.
 			EnvironmentConfig envConfig = new EnvironmentConfig();
 			envConfig.setAllowCreate(true);
@@ -88,8 +88,8 @@ public class CompressedBerkeleyDB extends CompressedStorage
 				DatabaseEnvironment1.close();
 			if (DatabaseEnvironment2 != null)
 				DatabaseEnvironment2.close();
-			compressor.end();
-			benchmarks.close();
+			deflater.end();
+			filePrinter.close();
 			return true;
 		}
 		catch(DatabaseException ex)
@@ -333,9 +333,9 @@ public class CompressedBerkeleyDB extends CompressedStorage
 		{
 			separatorInput = sep.getBytes("UTF-8");
 			byte [] separator = new byte[separatorInput.length];
-			compressor.setInput(separatorInput);
-			compressor.finish();
-			compressor.deflate(separator);
+			deflater.setInput(separatorInput);
+			deflater.finish();
+			deflater.deflate(separator);
 			DatabaseEntry key = new DatabaseEntry(key_s.getBytes("UTF-8"));
 			DatabaseEntry data = new DatabaseEntry();
 			db.get(null, key, data, LockMode.DEFAULT);
@@ -422,24 +422,24 @@ public class CompressedBerkeleyDB extends CompressedStorage
 	 * @throws UnsupportedEncodingException
 	 */
 	public void dictionaryEncoding(String textfile) throws FileNotFoundException, UnsupportedEncodingException {
-		//Deflater compressor = new Deflater(Deflater.BEST_COMPRESSION);
+		//Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
 		File file = new File(textfile + ".txt");
 		Scanner sc = new Scanner(file);
 		String sep = "}{";
 		byte[] separatorInput = sep.getBytes("UTF-8");
 		byte [] separator = new byte[separatorInput.length];
-		compressor.setInput(separatorInput);
-		compressor.finish();
-		compressor.deflate(separator);
+		deflater.setInput(separatorInput);
+		deflater.finish();
+		deflater.deflate(separator);
 		while (sc.hasNextLine()) {
 			String toCompress = sc.nextLine();
 			if (toCompress.substring(0, 4).equals("EDGE")) {
 				String infoToCompress = toCompress.substring(toCompress.indexOf('{') + 1, toCompress.indexOf('}'));
 				byte[] input = infoToCompress.getBytes("UTF-8");
 				byte [] output = new byte[input.length + 100];
-				compressor.setInput(input);
-				compressor.finish();
-				int compressedDataLength = compressor.deflate(output);
+				deflater.setInput(input);
+				deflater.finish();
+				int compressedDataLength = deflater.deflate(output);
 				//System.out.println(compressedDataLength);
 				/*	DatabaseEntry key = new DatabaseEntry(toCompress.substring(toCompress.indexOf('(')+1, toCompress.indexOf(')')).getBytes("UTF-8"));
 			DatabaseEntry data = new DatabaseEntry();
@@ -460,25 +460,25 @@ public class CompressedBerkeleyDB extends CompressedStorage
 				//	} else {
 				//edges.put(key, output);
 				//}
-				compressor.reset();
+				deflater.reset();
 			}
 			if (toCompress.substring(0, 4).equals("VERT")) {
 				String infoToCompress = toCompress.substring(toCompress.indexOf('{') + 1, toCompress.indexOf('}'));
 				byte [] input = infoToCompress.getBytes("UTF-8");
 				byte [] output = new byte[input.length + 100];
-				compressor.setInput(input);
-				compressor.finish();
-				int compressedDataLength = compressor.deflate(output);
+				deflater.setInput(input);
+				deflater.finish();
+				int compressedDataLength = deflater.deflate(output);
 				Integer node = Integer.parseInt(toCompress.substring(toCompress.indexOf('(')+1, toCompress.indexOf(")")));
 				/*	DatabaseEntry key = new DatabaseEntry(node.toString().getBytes("UTF-8"));
 			DatabaseEntry value = new DatabaseEntry(output);
 			annotationsDatabase.put(null, key, value);*/
 				putAnnotationEntry(node.toString(), output);
 				//System.out.println(compressedDataLength);
-				compressor.reset();
+				deflater.reset();
 			}
 		}
-		//compressor.end();
+		//deflater.end();
 		sc.close();
 		//Pair<HashMap< Integer, byte[]>, HashMap< String, byte[]>> maps = new Pair<HashMap< Integer, byte[]>, HashMap< String, byte[]>>(vertexes, edges);
 		//return maps;
@@ -622,7 +622,7 @@ public class CompressedBerkeleyDB extends CompressedStorage
 		try {
 			//renameNodes(textfile);
 			HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> asl = createAncestorSuccessorList(textfile);
-			updateAncestorsSuccessors(asl);
+			updateAncestorsSuccessors();
 			dictionaryEncoding(textfile);
 			return true;
 		} catch (FileNotFoundException | UnsupportedEncodingException e)

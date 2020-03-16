@@ -6,6 +6,7 @@ import org.apache.commons.codec.binary.Hex;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -20,8 +21,7 @@ import java.util.logging.Level;
 
 public class CompressedSQL extends CompressedStorage
 {
-    private Connection dbConnectionScaffold;
-    private Connection dbConnectionAnnotations;
+    private Connection dbConnection;
 
     private int cachedEntryCount = 0;
     private List<SimpleEntry<String, String>> scaffoldCache = new ArrayList<>(GLOBAL_TX_SIZE + 1);
@@ -44,43 +44,29 @@ public class CompressedSQL extends CompressedStorage
         super.initialize(filePath);
         try
         {
-            benchmarks = new PrintWriter("benchmarks/compression_time_berkeleyDB.txt", "UTF-8");
+            filePrinter = new PrintWriter("benchmarks/compression_time_PostgreSQL.txt", StandardCharsets.UTF_8);
             String databaseDriver = "org.postgresql.Driver";
-            String databasePrefix = "jdbc:postgresql://localhost:5432/";
-            String databaseSuffix = "_4m";
-            // for postgres, it is jdbc:postgres://localhost/database_name
-            // for h2, it is jdbc:h2:/tmp/spade.sql
-            String databaseURL = databasePrefix + "scaffold" + databaseSuffix;
+            String databaseURL = "jdbc:postgresql://localhost:5432/";
+			String databaseName = "compression";
+			databaseURL += databaseName;
             String databaseUsername = "raza";
             String databasePassword = "12345";
 
             Class.forName(databaseDriver).newInstance();
-            dbConnectionScaffold = DriverManager.getConnection(databaseURL, databaseUsername, databasePassword);
-            dbConnectionScaffold.setAutoCommit(false);
+            dbConnection = DriverManager.getConnection(databaseURL, databaseUsername, databasePassword);
+            dbConnection.setAutoCommit(false);
 
-            Statement dbStatementScaffold = dbConnectionScaffold.createStatement();
-            // Create scaffold table if it does not already exist
-            String createScaffoldTable = "CREATE TABLE IF NOT EXISTS "
-                    + "scaffold"
-                    + "(key VARCHAR(256), "
-                    + "value VARCHAR NOT NULL "
-                    + ")";
-            dbStatementScaffold.execute(createScaffoldTable);
-            dbStatementScaffold.close();
+            Statement dbStatement = dbConnection.createStatement();
+			String createScaffold = "DROP TABLE IF EXISTS " + SCAFFOLD_TABLE + ", " + ANNOTATIONS_TABLE + " ;" +
+					"CREATE TABLE " + SCAFFOLD_TABLE +
+                    " (key VARCHAR(256) NOT NULL, value VARCHAR NOT NULL)";
+            dbStatement.execute(createScaffold);
 
-            databaseURL = databasePrefix + "annotations" + databaseSuffix;
-            dbConnectionAnnotations = DriverManager.getConnection(databaseURL, databaseUsername, databasePassword);
-            dbConnectionAnnotations.setAutoCommit(false);
-
-            Statement dbStatementAnnotations = dbConnectionAnnotations.createStatement();
             // Create annotations table if it does not already exist
-            String createAnnotationsTable = "CREATE TABLE IF NOT EXISTS "
-                    + "annotations"
-                    + "(key VARCHAR(256) NOT NULL, "
-                    + "value BYTEA NOT NULL "
-                    + ")";
-            dbStatementAnnotations.execute(createAnnotationsTable);
-            dbStatementAnnotations.close();
+            String createAnnotations = "CREATE TABLE " + ANNOTATIONS_TABLE +
+                    " (key VARCHAR(256) NOT NULL, value BYTEA NOT NULL)";
+            dbStatement.execute(createAnnotations);
+            dbStatement.close();
 
             return true;
         }
@@ -101,11 +87,9 @@ public class CompressedSQL extends CompressedStorage
         try
         {
             flushBulkScaffold(true);
-            dbConnectionScaffold.commit();
-            dbConnectionScaffold.close();
-
-            dbConnectionAnnotations.commit();
-            dbConnectionAnnotations.close();
+            dbConnection.commit();
+            dbConnection.close();
+            filePrinter.close();
 
             return true;
         }
@@ -150,10 +134,10 @@ public class CompressedSQL extends CompressedStorage
                         + scaffoldFileName
                         + "' CSV HEADER;";
 
-                Statement statement = dbConnectionScaffold.createStatement();
+                Statement statement = dbConnection.createStatement();
                 statement.execute(copyScaffoldQuery);
                 statement.close();
-                dbConnectionScaffold.commit();
+                dbConnection.commit();
             }
             catch(Exception ex)
             {
@@ -194,10 +178,10 @@ public class CompressedSQL extends CompressedStorage
                 {
                     return processBulkScaffold(key, value);
                 }
-                String sqlStatement = "INSERT INTO scaffold VALUES('" + key + "', '" + value + "');";
-                Statement statement = dbConnectionScaffold.createStatement();
+                String sqlStatement = "INSERT INTO " + SCAFFOLD_TABLE + " VALUES('" + key + "', '" + value + "');";
+                Statement statement = dbConnection.createStatement();
                 statement.execute(sqlStatement);
-                dbConnectionScaffold.commit();
+                dbConnection.commit();
                 statement.close();
             }
             return true;
@@ -242,10 +226,10 @@ public class CompressedSQL extends CompressedStorage
                         + annotationFileName
                         + "' CSV HEADER;";
 
-                Statement statement = dbConnectionAnnotations.createStatement();
+                Statement statement = dbConnection.createStatement();
                 statement.execute(copyAnnotationsQuery);
                 statement.close();
-                dbConnectionAnnotations.commit();
+                dbConnection.commit();
             }
             catch(Exception ex)
             {
@@ -281,12 +265,12 @@ public class CompressedSQL extends CompressedStorage
             {
                 return processBulkAnnotations(key, value);
             }
-            String sqlStatement = "INSERT INTO annotations VALUES(?, ?);";
-            PreparedStatement statement = dbConnectionAnnotations.prepareStatement(sqlStatement);
+            String sqlStatement = "INSERT INTO " + ANNOTATIONS_TABLE + " VALUES(?, ?);";
+            PreparedStatement statement = dbConnection.prepareStatement(sqlStatement);
             statement.setString(1, key);
             statement.setBytes(2, value);
             statement.executeUpdate();
-            dbConnectionAnnotations.commit();
+            dbConnection.commit();
             statement.close();
 
             return true;
@@ -303,9 +287,9 @@ public class CompressedSQL extends CompressedStorage
         try
         {
             String sqlStatement = "INSERT INTO annotations VALUES('" + key + "', '" + value + "');";
-            Statement statement = dbConnectionAnnotations.createStatement();
+            Statement statement = dbConnection.createStatement();
             statement.execute(sqlStatement);
-            dbConnectionAnnotations.commit();
+            dbConnection.commit();
             statement.close();
             return true;
         }
@@ -333,8 +317,8 @@ public class CompressedSQL extends CompressedStorage
             else
             {
                 String sqlStatement = "SELECT * FROM scaffold WHERE key='" + key + "';";
-                dbConnectionScaffold.commit();
-                Statement statement = dbConnectionScaffold.createStatement();
+                dbConnection.commit();
+                Statement statement = dbConnection.createStatement();
                 ResultSet result = statement.executeQuery(sqlStatement);
                 String value = null;
                 while(result.next())
@@ -357,8 +341,8 @@ public class CompressedSQL extends CompressedStorage
         try
         {
             String sqlStatement = "SELECT * FROM annotations WHERE key='" + key + "';";
-            dbConnectionAnnotations.commit();
-            Statement statement = dbConnectionAnnotations.createStatement();
+            dbConnection.commit();
+            Statement statement = dbConnection.createStatement();
             ResultSet result = statement.executeQuery(sqlStatement);
             while (result.next())
             {

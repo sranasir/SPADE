@@ -10,7 +10,9 @@ import spade.core.Edge;
 import spade.core.Graph;
 import spade.core.Vertex;
 
+import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -24,37 +26,34 @@ import java.util.Vector;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
 import java.util.zip.Inflater;
 
 public abstract class CompressedStorage extends AbstractStorage
 {
     protected static Integer nextVertexID;
+    protected static Integer edgeCount = 0;
     public static Integer W;
     public static Integer L;
-    protected static Deflater compressor;
+    protected static Deflater deflater;
     protected static Vector<String> alreadyRenamed;
     protected static Map<String, Integer> hashToID;
     protected static Map<Integer, String> idToHash;
     protected static int edgesInMemory;
-    protected static int maxEdgesInMemory = 10000;    // TODO:assign to 1 for ignoring uncompressedBuffer
     protected static Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> uncompressedBuffer;
-    protected static final Logger logger = Logger.getLogger(CompressedBerkeleyDB.class.getName());
-    protected static boolean useDeltaForRunLength = true;    // TODO: assign to false for using node ids in run length encoding
-    protected static boolean optimizeReferenceSelection = true;    //TODO: assign to false for normal reference selection
+    protected static final Logger logger = Logger.getLogger(CompressedStorage.class.getName());
+    protected static int maxEdgesInMemory = 10;    // assign to 1 for ignoring uncompressedBuffer
+    protected static boolean useDeltaForRunLength = true;    // assign to false for using node ids in run length encoding
+    protected static boolean optimizeReferenceSelection = true;    // assign to false for normal reference selection
+    protected boolean useAdjacencyListCache = true;   // assign to false to avoid building and using adjacencyListCache
     public Map<String, String> adjacencyListCache;
-    protected boolean useAdjacencyListCache = false;   // TODO: assign to false to avoid building and using adjacencyListCache
     protected final int GLOBAL_TX_SIZE = 10000;
-    public long scaffoldTime;
-    public long annotationsTime;
-    public long compressionTimeForIngestion;
-    public long storageTimeForIngestion;
-    public long compressionTimeForRetrieval;
-    public long storageTimeForRetrieval;
-    public static PrintWriter benchmarks;
-    public boolean ingestionPeriod = true;
+    public static PrintWriter filePrinter;
     public static int adjacencyListCacheHits = 0;
     public static int getScaffolds = 0;
     private Map<String, AbstractVertex> queryVertices = new HashMap<>();
+    private int resetCounter = 0;
+    private static final int RESET_COUNT = 1000000000;
 
     /**
      * This method is invoked by the kernel to initialize the storage.
@@ -65,7 +64,7 @@ public abstract class CompressedStorage extends AbstractStorage
      */
     public boolean initialize(String filePath)
     {
-        compressor = new Deflater(Deflater.BEST_COMPRESSION);
+        deflater = new Deflater(Deflater.BEST_COMPRESSION);
         W=10;
         L=5;
         nextVertexID = 0;
@@ -75,14 +74,18 @@ public abstract class CompressedStorage extends AbstractStorage
         uncompressedBuffer = new HashMap<>();
         adjacencyListCache = new HashMap<>();
         edgesInMemory = 0;
-        scaffoldTime = 0;
-        annotationsTime = 0;
-        compressionTimeForIngestion = 0;
-        storageTimeForIngestion = 0;
-        compressionTimeForRetrieval = 0;
-        storageTimeForRetrieval = 0;
 
         return true;
+    }
+
+    public int vertexCount()
+    {
+        return nextVertexID;
+    }
+
+    public int edgeCount()
+    {
+        return edgeCount;
     }
 
 
@@ -270,22 +273,14 @@ public abstract class CompressedStorage extends AbstractStorage
         SortedSet<Integer> successors = new TreeSet<>();
         Integer ancestorLayer = 1;
         Integer successorLayer = 1;
-        long storageClock = System.nanoTime();
-        String aux = (String) getScaffoldEntry(id.toString());
-        if(ingestionPeriod)
-            storageTimeForIngestion += (System.nanoTime() - storageClock);
-        else
-            storageTimeForRetrieval += (System.nanoTime() - storageClock);
+        String scaffoldEntry = (String) getScaffoldEntry(id.toString());
 
-        if(aux != null && aux.contains("/"))
+        if(scaffoldEntry != null && scaffoldEntry.contains("/"))
         {
             // split the line in two parts : ancestor list and successor list.
-            String ancestorList = aux.substring(0, aux.indexOf('/'));
-            String successorList = aux.substring(aux.indexOf('/')+2);
+            String ancestorList = scaffoldEntry.substring(0, scaffoldEntry.indexOf('/'));
             ancestorLayer = Integer.parseInt(ancestorList.substring(0, ancestorList.indexOf(' ')));
-            successorLayer = Integer.parseInt(successorList.substring(0, successorList.indexOf(' ')));
             ancestorList = ancestorList.substring(ancestorList.indexOf(' ') + 1);
-            successorList = successorList.substring(successorList.indexOf(' ') + 1);
             //uncompressAncestors
             if (uncompressAncestors)
             {
@@ -311,6 +306,9 @@ public abstract class CompressedStorage extends AbstractStorage
                     }
                 }
             }
+            String successorList = scaffoldEntry.substring(scaffoldEntry.indexOf('/') + 2);
+            successorLayer = Integer.parseInt(successorList.substring(0, successorList.indexOf(' ')));
+            successorList = successorList.substring(successorList.indexOf(' ') + 1);
             // uncompressSuccessors
             if (uncompressSuccessors)
             {
@@ -342,8 +340,7 @@ public abstract class CompressedStorage extends AbstractStorage
         }
         Pair<Integer, SortedSet<Integer>> ancestorsAndLayer = new Pair<>(ancestorLayer, ancestors);
         Pair<Integer, SortedSet<Integer>> successorsAndLayer = new Pair<>(successorLayer, successors);
-        Pair<Pair<Integer, SortedSet<Integer>>, Pair<Integer, SortedSet<Integer>>> ancestorsAndSuccessors = new Pair<>(ancestorsAndLayer, successorsAndLayer);
-        return ancestorsAndSuccessors;
+        return new Pair<>(ancestorsAndLayer, successorsAndLayer);
     }
 
     public Pair<Pair<Integer, Integer>, String> commonNodes(SortedSet<Integer> reference,
@@ -443,10 +440,7 @@ public abstract class CompressedStorage extends AbstractStorage
         {
             long storageClock = System.nanoTime();
             String currentLine = (String) getScaffoldEntry(referenceID.toString());
-            if(ingestionPeriod)
-                storageTimeForIngestion += (System.nanoTime() - storageClock);
-            else
-                storageTimeForRetrieval += (System.nanoTime() - storageClock);
+
             if(currentLine.length() > 0)
             {
 
@@ -490,7 +484,7 @@ public abstract class CompressedStorage extends AbstractStorage
             //System.out.println("step u");
             if (layer.contains("_")) { //this is the case for the first layer only
                 remainingNodesLayer = layer.substring(layer.indexOf("_")+2);
-                //benchmarks.println("____ " + layer + " /// " + remainingNodesLayer);
+                //filePrinter.println("____ " + layer + " /// " + remainingNodesLayer);
                 //System.out.println("step v");
             } else {
                 // uncompress the bitlist
@@ -510,7 +504,7 @@ public abstract class CompressedStorage extends AbstractStorage
                     bitListLayer = remainingNodesLayer;
                     remainingNodesLayer = "";
                 }
-                //benchmarks.println("ref:" + layer + " ////remaining:" + remainingNodesLayer + "////bitListLayer:" + bitListLayer );
+                //filePrinter.println("ref:" + layer + " ////remaining:" + remainingNodesLayer + "////bitListLayer:" + bitListLayer );
                 //System.out.println("bitListLayer :" + bitListLayer + "/");
                 int count = 0;
                 SortedSet<Integer> list2 = new TreeSet<Integer>();
@@ -591,14 +585,14 @@ public abstract class CompressedStorage extends AbstractStorage
 
     /**
      * Update the scaffold database
-     * @param uncompressedBuffer
      */
-    void updateAncestorsSuccessors(Map<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> uncompressedBuffer)
+    void updateAncestorsSuccessors()
     {
         try
         {
             //for each line to update
-            Set<Map.Entry<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>>> entries = CompressedStorage.uncompressedBuffer.entrySet();
+            Set<Map.Entry<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>>> entries =
+                    CompressedStorage.uncompressedBuffer.entrySet();
             SortedSet<Integer> ancestors;
             SortedSet<Integer> successors;
             HashMap<Integer, Pair<SortedSet<Integer>, SortedSet<Integer>>> toUpdate = new HashMap<>();
@@ -616,9 +610,7 @@ public abstract class CompressedStorage extends AbstractStorage
                 //update other nodes
                 for (Integer nodeID = id + 1; nodeID < id + W + 1; nodeID++)
                 {
-                    long storageClock = System.nanoTime();
                     String line = (String) getScaffoldEntry(nodeID.toString());
-                    storageTimeForIngestion += (System.nanoTime() - storageClock);
                     if (line != null && line.contains("/"))
                     {
                         // getAnnotation reference and see if it is id.
@@ -695,9 +687,7 @@ public abstract class CompressedStorage extends AbstractStorage
         try
         {
             Inflater decompresser = new Inflater();
-            long storageClock = System.nanoTime();
             byte[] input = getAnnotationEntry(vertexID.toString());
-            storageTimeForRetrieval += (System.nanoTime() - storageClock);
             String vertexString;
             if(input.length == 0)
             {
@@ -765,14 +755,9 @@ public abstract class CompressedStorage extends AbstractStorage
     {
         try
         {
-            String edgeID = childID + "->" + parentID;
+            String edgeID = childID + "->" + parentID; //TODO: change key to edgeHash
             Inflater decompresser = new Inflater();
-            long storageClock = System.nanoTime();
             byte[] input = getAnnotationEntry(edgeID);
-            if(ingestionPeriod)
-                storageTimeForIngestion += (System.nanoTime() - storageClock);
-            else
-                storageTimeForRetrieval += (System.nanoTime() - storageClock);
             String edgeString;
             if(input == null || input.length == 0)
             {
@@ -802,11 +787,11 @@ public abstract class CompressedStorage extends AbstractStorage
     {
         try
         {
+            // compress annotation and put in storage
             String childHash = incomingEdge.getChildVertex().bigHashCode();
             String parentHash = incomingEdge.getParentVertex().bigHashCode();
             Integer childID = hashToID.get(childHash);
             Integer parentID = hashToID.get(parentHash);
-            long auxClock = System.nanoTime();
             StringBuilder edgeStringBuilder = new StringBuilder();
             for (Map.Entry<String, String> currentEntry : incomingEdge.getAnnotations().entrySet())
             {
@@ -824,22 +809,22 @@ public abstract class CompressedStorage extends AbstractStorage
                 edgeStringBuilder.append(",");
             }
             String edgeString = edgeStringBuilder.substring(0, edgeStringBuilder.length() - 1);
-            byte [] input = edgeString.getBytes("UTF-8");
-            byte [] temp = new byte[input.length + 100];
-            compressor.setInput(input);
-            compressor.finish();
-            int output_size = compressor.deflate(temp);
+            byte [] input = edgeString.getBytes(StandardCharsets.UTF_8);
+            byte [] temp = new byte[input.length];
+            deflater.setInput(input);
+            deflater.finish();
+            int output_size = deflater.deflate(temp);
             byte[] output = Arrays.copyOf(temp, output_size);
-            String key = childID + "->" + parentID;
-            long storageClock = System.nanoTime();
+            String key = childID + "->" + parentID; //TODO: change key to edgeHash
             putAnnotationEntry(key, output);
-            storageTimeForIngestion += (System.nanoTime() - storageClock);
-//            compressor.reset();
+            resetCounter++;
+            if((resetCounter % RESET_COUNT) == 0)
+            {
+                deflater.reset();
+            }
 
-            long auxClock2 = System.nanoTime();
-            annotationsTime = annotationsTime + auxClock2-auxClock;
-            // scaffold storage
-            //update uncompressedBuffer
+            // compress scaffold and put in storage
+            // update uncompressedBuffer here
             Pair<SortedSet<Integer>, SortedSet<Integer>> childLists = uncompressedBuffer.get(childID);
             if (childLists == null)
             {
@@ -855,19 +840,13 @@ public abstract class CompressedStorage extends AbstractStorage
             parentLists.first().add(parentID);
             uncompressedBuffer.put(parentID, parentLists);
             edgesInMemory++;
-            long auxClock3 = System.nanoTime();
-            scaffoldTime = scaffoldTime + auxClock3 - auxClock2;
             if(edgesInMemory % maxEdgesInMemory == 0)
             {
-                annotationsTime = 0;
-                long auxClock4 = System.nanoTime();
-                updateAncestorsSuccessors(uncompressedBuffer);
+                updateAncestorsSuccessors();
                 uncompressedBuffer.clear();
-                long auxClock5 = System.nanoTime();
-                scaffoldTime = scaffoldTime + auxClock5 - auxClock4;
-                scaffoldTime = 0;
             }
 
+            edgeCount++;
             return true;
         }
         catch (Exception exception)
@@ -904,17 +883,26 @@ public abstract class CompressedStorage extends AbstractStorage
                 vertexStringBuilder.append(",");
             }
             String vertexString = vertexStringBuilder.substring(0, vertexStringBuilder.length() - 1);
-            byte [] input = vertexString.getBytes("UTF-8");
-            byte [] temp = new byte[input.length + 100];
-            compressor.setInput(input);
-            compressor.finish();
-            int output_size = compressor.deflate(temp);
-            byte[] output;
-            output = Arrays.copyOf(temp, output_size);
-            long storageClock = System.nanoTime();
+            byte [] input = vertexString.getBytes(StandardCharsets.UTF_8);
+//            deflater.setInput(input);
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream(input.length);
+            DeflaterOutputStream deflaterOutputStream = new DeflaterOutputStream(outputStream);
+            deflaterOutputStream.write(input);
+            deflaterOutputStream.close();
+//            byte[] buffer = new byte[1024];
+//            while (!deflater.finished())
+//            {
+//                int buffer_length = deflater.deflate(buffer);
+//                outputStream.write(buffer, 0, buffer_length);
+//            }
+//            outputStream.close();
+            byte[] output = outputStream.toByteArray();
             putAnnotationEntry(vertexID.toString(), output);
-            storageTimeForIngestion += (System.nanoTime() - storageClock);
-//            compressor.reset();
+            resetCounter++;
+            if((resetCounter % RESET_COUNT) == 0)
+            {
+                deflater.reset();
+            }
 
             return true;
         }
